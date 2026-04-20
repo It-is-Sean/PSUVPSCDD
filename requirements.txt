@@ -1,0 +1,33 @@
+# Core dependencies
+torch
+torchvision
+einops
+scipy
+numpy
+tqdm
+opencv-python
+matplotlib
+trimesh
+roma
+
+# Config
+omegaconf
+hydra-core
+
+# 3D reconstruction
+diffusers
+flow-matching
+open3d
+chamferdist
+
+# Video rendering
+imageio
+imageio-ffmpeg
+
+# UI
+gradio
+huggingface-hub[torch]>=0.22
+
+# Misc
+pyglet<2
+safetensors
