@@ -1,0 +1,7 @@
+features/
+checkpoints/
+outputs/
+*.pt
+*.pth
+*.ckpt
+

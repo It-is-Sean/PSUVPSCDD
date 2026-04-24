@@ -1,0 +1,12 @@
+feature_path: experiments/probe3d/features/nova3r_scrream_n1.pt
+save_path: experiments/probe3d/checkpoints/probe_nova3r_d1.pt
+adapter_depth: 1
+latent_dim: 512
+hidden_dim: 1024
+num_points: 8192
+batch_size: 4
+epochs: 100
+lr: 0.0001
+weight_decay: 0.0001
+num_workers: 0
+

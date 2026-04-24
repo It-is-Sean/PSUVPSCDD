@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Logs and local outputs
+*.log
+wandb/
+runs/
+outputs/
+eval_results/
+
+# Datasets and checkpoints
+datasets/
+data/*/
+!data/scrream/
+!data/scrream/**
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Probe artifacts
+experiments/probe3d/features/
+experiments/probe3d/checkpoints/
+experiments/probe3d/outputs/
+
+# System files
+.DS_Store
