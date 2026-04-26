@@ -4,11 +4,36 @@ Minimal probing experiment for decoding complete 3D geometry from frozen NOVA3R 
 
 The backbone is frozen. Only `SmallAdapter` and `PointDecoder` are trained.
 
-## Step 1: Run Official Baseline
+## Step 1: Build Adapter Data
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/scripts/prepare_scrream_adapter_data.py \
+  --data_root /home/wdh/nova3r/datasets/eval_scrream \
+  --output_root experiments/probe3d/adapter_data \
+  --group_size 4 \
+  --sample_stride 1 \
+  --pad_short_scenes \
+  --pseudo_gt_views 2 \
+  --pseudo_gt_queries 20000 \
+  --feature_ckpt /home/wdh/nova3r/checkpoints/scene_n2/checkpoint-last.pth \
+  --pseudo_gt_ckpt /home/wdh/nova3r/checkpoints/scene_n2/checkpoint-last.pth \
+  --skip_failures
+```
+
+This creates:
+
+- a scene-level `train` / `val` / `test` split
+- 4-frame groups per scene
+- a manifest JSON with per-sample frame lists
+- an adapter-training `.pt` dataset with `features`, `target_points`, `splits`, and per-sample `metadata`
+
+`pseudo_gt_views=2` keeps pseudo GT on the official NOVA3R inference path while each adapter sample still carries 4 frames.
+
+## Step 2: Run Official Baseline
 
 Run the official NOVA3R SCRREAM baseline first to verify checkpoints, config, dataset paths, and CUDA environment.
 
-## Step 2: Inspect Outputs
+## Step 3: Inspect Outputs
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/scripts/inspect_nova3r_outputs.py \
@@ -19,7 +44,7 @@ CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/scripts/inspect_nova3r_outputs
 
 The script prints output keys and tensor shapes. If model config is not found, run it with the same Hydra model config used by `eval/mv_recon/test_nova3r.py`.
 
-## Step 3: Extract Features
+## Step 4: Extract Features
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/scripts/extract_nova3r_features.py \
@@ -31,12 +56,14 @@ CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/scripts/extract_nova3r_feature
 
 If `--feature_key` is omitted, the script prints candidates and uses the first feature-like tensor with a warning. Use `--target_key` only after inspecting batch tensor shapes if automatic complete-point extraction fails.
 
-## Step 4: Train Probe
+## Step 5: Train Probe
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/train_probe.py \
-  --feature_path experiments/probe3d/features/nova3r_scrream_n1.pt \
+  --feature_path experiments/probe3d/adapter_data/scrream_adapter_dataset.pt \
   --save_path experiments/probe3d/checkpoints/probe_nova3r_d1.pt \
+  --train_split train \
+  --val_split val \
   --adapter_depth 1 \
   --latent_dim 512 \
   --num_points 8192 \
@@ -44,12 +71,13 @@ CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/train_probe.py \
   --epochs 100
 ```
 
-## Step 5: Evaluate
+## Step 6: Evaluate
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python experiments/probe3d/eval_probe.py \
-  --feature_path experiments/probe3d/features/nova3r_scrream_n1.pt \
-  --checkpoint experiments/probe3d/checkpoints/probe_nova3r_d1.pt
+  --feature_path experiments/probe3d/adapter_data/scrream_adapter_dataset.pt \
+  --checkpoint experiments/probe3d/checkpoints/probe_nova3r_d1.pt \
+  --split test
 ```
 
 Use `--save_predictions` to write predicted point clouds to `experiments/probe3d/outputs/`.
@@ -59,4 +87,3 @@ Use `--save_predictions` to write predicted point clouds to `experiments/probe3d
 - Keep `adapter_depth` small. A shallow adapter is the point of this representation probe.
 - If `pytorch3d` is unavailable, this code uses a simple `torch.cdist` Chamfer L2 implementation.
 - Feature files, checkpoints, outputs, and datasets are ignored by git.
-

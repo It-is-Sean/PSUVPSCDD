@@ -20,6 +20,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--feature_path", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--split", default="test")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--save_predictions", action="store_true")
@@ -32,7 +33,14 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ckpt = torch.load(args.checkpoint, map_location="cpu")
     train_args = ckpt["args"]
-    dataset = FeaturePointDataset(args.feature_path, pool_features=not train_args.get("no_pool_features", False))
+    try:
+        dataset = FeaturePointDataset(
+            args.feature_path,
+            pool_features=not train_args.get("no_pool_features", False),
+            split=args.split,
+        )
+    except ValueError:
+        dataset = FeaturePointDataset(args.feature_path, pool_features=not train_args.get("no_pool_features", False))
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     adapter = SmallAdapter(
@@ -77,4 +85,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
