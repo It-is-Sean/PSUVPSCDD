@@ -1,69 +1,56 @@
 # Probe workspace overview
 
-This branch turns NOVA3R into the base repository for the proposal **Shared Complete-3D Decoding Probe**.
+This repo is trying to answer one concrete question:
 
-## What this fork adds
+> Can a shared complete-3D decoder reveal 3D structure in frozen representations that shallow direct readout misses?
 
-- a proposal-oriented docs layer (`docs/probe/`)
-- a reproducible config layer (`configs/probe/`)
-- a new probe package (`nova3r/probe/`) for lightweight adapters, direct readout, metrics, and backbone registries
-- run / sweep / evaluation launcher stubs (`scripts/probe/`)
-- experiment logging templates (`experiments/`)
+## Current experimental status
 
-## Conceptual mapping
+Right now the real progress is simpler than the full proposal scope:
 
-- **Stage 1** uses NOVA3R's point-latent interface as the shared canonical decoder family.
-- **Stage 2** adds a lightweight scene-token adapter from frozen representations to canonical scene tokens.
-- **Stage 3** compares shared complete-3D decoding against a shallow direct readout baseline.
+- on **SCREAM**, we have already trained **2-layer and 4-layer MLP adapters**
+- the result is **promising enough to support feasibility**, with the best run reaching roughly **CD ≈ 0.18**
+- switching to a **4-layer attention adapter** did **not** improve things and currently looks less convincing
+- the next real milestone is to move to a **larger dataset (ScanNet v2)** and test whether this proposal still works there
 
-## Repository conventions for this fork
+So the current story is:
 
-- Keep proposal-specific code under `nova3r/probe/` instead of scattering it through upstream modules.
-- Use `configs/probe/` as the single source of truth for model families, data phases, budgets, and sweeps.
-- Put generated outputs in `artifacts/` rather than committing them.
-- Log every substantial experiment with `experiments/templates/run_card.md`.
+1. the proposal looks **feasible on a smaller dataset**
+2. MLP-style adapters are currently the stronger direction
+3. the next job is **scale validation**, not expanding scope
 
-## Visualization workflow
+## What matters most right now
 
-Probe runs can now be rendered through a reusable visualization entrypoint:
+If you only want the essential documents, read these in order:
 
-```bash
-# Latest run under artifacts/reports/vggt_to_nova3r/
-make probe-viz
+1. `PROPOSAL.md` — the core idea
+2. `PROJECT.md` — current status / decisions / next step
+3. `experiments/probe3d/README.md` — the path where the real experiments currently live
 
-# Explicit run directory
-make probe-viz ARGS="--run-dir artifacts/reports/vggt_to_nova3r/20260424-092748"
-```
+Everything else under `docs/probe/` should be treated as supporting notes, not the main project narrative.
 
-This workflow:
+## Repo reality check
 
-- resolves a probe run directory
-- loads `pointcloud.npy` / `pointcloud.ply`
-- writes `visualization/preview.png`
-- writes `visualization/turntable.mp4` or `visualization/turntable.gif`
-- records rendering settings in `visualization/visualization_manifest.json`
-- falls back to a lightweight matplotlib renderer when the heavier PyTorch3D stack is unavailable
+The repo currently has two layers:
 
-Implementation entrypoint:
+- a **cleaner research scaffold**: `configs/probe/`, `scripts/probe/`, `nova3r/probe/`
+- a **more executable experiment path**: `experiments/probe3d/`
 
-- `scripts/probe/visualize_run.py`
+At the moment, the **actual experimental history is mostly in `experiments/probe3d/`**.
 
-Reusable rendering utilities remain in:
+## Current strategic interpretation
 
-- `demo/visualization/render_points.py`
+The proposal is conceptually broad, but the practical first-paper path should stay narrow:
 
-## Current state
+- focus on **image / geometry backbones first**
+- treat **video** as a later extension
+- prioritize a strong **feasibility story on ScanNet v2** over adding more model families too early
 
-The workspace is ready for research planning and incremental implementation.
+## Optional supporting notes
 
-Important nuance:
+Use these only when needed:
 
-- the **structured probe workspace** (`scripts/probe/`, `configs/probe/`, `nova3r/probe/`) is still partly scaffold-level, especially for generic training/evaluation launchers
-- the **concrete fast-moving experiment path** currently lives more in `experiments/probe3d/`, where actual adapter-training code already exists
-
-So the repo should be read as having:
-
-1. a cleaner long-horizon research interface
-2. a messier but more executable probe3d path
-
-The documentation should keep these two layers distinct instead of implying that the whole repo is already uniformly wired end-to-end.
+- `docs/probe/experiment_history.md` — consolidated run history read from logs/results
+- `docs/probe/nova3r_mapping.md` — mapping from proposal ideas to NOVA3R code
+- `docs/probe/experiment_plan.md` — phased implementation plan
+- `docs/probe/todo.md` — loose TODO list

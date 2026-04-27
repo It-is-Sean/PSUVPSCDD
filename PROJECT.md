@@ -7,76 +7,72 @@
 
 ## Goal
 
-Use NOVA3R's Stage-1 latent-to-point decoder family as the **shared canonical decoder**, then build a research fork for the proposal:
+Use NOVA3R's Stage-1 latent-to-point decoder family as the **shared canonical decoder**, then test the proposal:
 
 > Probing Image and Video Foundation Representations via Shared Complete-3D Decoding
 
-The fork compares two probe signals under a unified protocol:
+The key comparison is still:
 
-1. **Shared decoding probe**: frozen representation -> lightweight scene-token adapter -> shared complete-3D decoder.
-2. **Direct 3D readout baseline**: frozen representation -> shallow point/depth/pose heads.
+1. **Shared decoding probe**: frozen representation -> lightweight adapter -> shared complete-3D decoder
+2. **Direct 3D readout baseline**: frozen representation -> shallow point/depth/pose heads
 
-## Workspace map
+## Current status
 
-- `docs/probe/` — proposal digest, method mapping, experiment plan, TODOs
-- `configs/probe/` — stage configs, model family lists, stress-test/sweep settings
-- `nova3r/probe/` — proposal-specific probe modules (adapter, direct readout, metrics, registries)
-- `scripts/probe/` — launch / planning scripts, sweeps, sanity runs, evaluation scaffolding
-- `experiments/` — run templates and logging conventions
-- `artifacts/` — generated manifests, tables, figures, reports, checkpoints (runtime outputs)
-- `data/probe/` — dataset protocol notes for Phase 1 / Phase 2
+The real experimental status right now is:
 
-## Key design decisions
+- on **SCREAM**, we have already trained **2-layer and 4-layer MLP adapters**
+- those runs are good enough to support **initial feasibility** of the proposal on a smaller dataset
+- the current best result is roughly **CD ≈ 0.18**
+- a **4-layer attention adapter** has also been tested, but its effect is currently **not as convincing** as the MLP branch
 
-- Keep the **canonical decoder decoder-conditional** and anchored to NOVA3R Stage 1 instead of redesigning a new decoder family.
-- Treat this branch as a **research fork**, not an upstream-clean minimal patch. Documentation and experiment scaffolding are first-class.
-- Keep the adapter in a **small-adapter regime** by default, so the probe still measures representation quality instead of adapter capacity.
-- Compare **within-family rankings** and **cross-family trends**, but do not over-interpret a single global leaderboard.
-- For project setup, prefer extending an obvious upstream repo on a dedicated branch instead of starting from an empty repo skeleton.
+So the current conclusion is not “the full proposal is solved,” but:
 
-## Current status memory
+- the basic idea appears **viable on SCREAM**
+- **MLP adapters currently look like the better working direction**
+- the next important question is whether this still holds on a **larger dataset**
 
-### Repo / scaffold
+## Current repo interpretation
 
-- Upstream `nova3r` has been cloned and converted into the working research fork.
-- The research workspace scaffold is in place: `docs/probe/`, `configs/probe/`, `scripts/probe/`, `experiments/`, `artifacts/`, `data/probe/`, and `nova3r/probe/`.
-- The collaborator-side `experiments/probe3d/` path has been preserved inside the same repo instead of living in a separate checkout.
-- `Makefile` targets exist for workspace prep, planning, sweeps, sanity runs, and run visualization.
-- A reusable visualization workflow now exists via `scripts/probe/visualize_run.py`, which can materialize `preview.png`, `turntable.(mp4|gif)`, and `visualization_manifest.json` from a probe run directory.
+The repo has two layers:
 
-### Canonical decoder side
+- a cleaner research scaffold: `configs/probe/`, `scripts/probe/`, `nova3r/probe/`
+- the more executable experimental path: `experiments/probe3d/`
 
-- The NOVA3R Stage-1 AE checkpoint has been downloaded locally:
-  - `checkpoints/scene_ae/checkpoint-last.pth`
-  - `checkpoints/scene_ae/.hydra/config.yaml`
-- The Stage-1 decoder has been extracted into a callable frozen wrapper:
-  - `nova3r/probe/canonical_decoder.py`
-- This wrapper loads only the `pts3d_head` weights from the AE checkpoint and exposes a minimal interface:
-  - `scene tokens -> decoder step`
-  - `scene tokens -> Euler sampling -> point cloud`
-- The decoder interface has already been smoke-tested with random tokens.
+At the moment, the **actual run history is mostly under `experiments/probe3d/`**.
 
-### VGGT side
+## What has already been set up
 
-- The official VGGT code has been vendored locally under `third_party/vggt`.
-- A VGGT frozen-feature extractor has been added:
-  - `nova3r/probe/backbones/vggt_extractor.py`
-- A temporary **training-free bridge** has been added for the first sanity pass:
-  - `nova3r/probe/bridges.py`
-- The first cross-model sanity script has been added:
-  - `scripts/probe/run_vggt_to_nova3r_decoder.py`
+### Repo / infra
 
-### What has not been finished yet
+- the separate probe workspace has been merged into this repo
+- `third_party/vggt/` has been vendored in
+- `dust3r/datasets/` and `datasets_preprocess/` have been copied in so the experiment path is less dependent on external checkouts
+- `Makefile`, environment checks, and supporting docs are in place
 
-- The current VGGT -> NOVA3R path is only a **sanity bridge**, not the final learned small adapter from the proposal.
-- The last sanity run was interrupted during / around VGGT pretrained weight download and should be re-run from the new project path.
-- No claim should be made yet from the current cross-model output until the sanity path finishes and the geometry is inspected.
+### Decoder / backbone wiring
 
-## Immediate next steps
+- the NOVA3R Stage-1 decoder family is available as the canonical decoder base
+- VGGT code and frozen-feature extraction support have been wired in
+- the repo can support the current SCRREAM experiments and the next scaling step
 
-1. Re-run the `VGGT final-layer features -> frozen NOVA3R decoder` sanity pass from the integrated repo root.
-2. Check whether the resulting point cloud is non-trivial / stable enough to justify continuing this route.
-3. Replace the current training-free bridge with the intended small learned adapter.
-4. Add a NOVA3R-native feature path as an internal control.
-5. Start measuring visible vs unseen-region behavior once the first runnable path is stable.
-6. Before expanding to video, lock whether the **first paper scope** should stay image/geometry-only for a cleaner initial claim.
+## Main strategic reading
+
+Even though the proposal mentions image / geometry / video together, the practical first-paper path should stay narrow:
+
+- first prove the idea well on **image / geometry backbones**
+- avoid widening to video too early
+- prioritize a clear **feasibility result on ScanNet v2**
+
+## Immediate next step
+
+The next main experiment should be:
+
+1. move from **SCREAM** to **ScanNet v2**
+2. train/test the current best adapter direction there
+3. use that result to argue that the proposal is not just a toy small-dataset effect, but a plausible research direction
+
+## Optional supporting files
+
+- `PROPOSAL.md` — core proposal text
+- `experiments/probe3d/README.md` — where the current real experiments live
+- `docs/probe/experiment_history.md` — detailed log-based history summary
