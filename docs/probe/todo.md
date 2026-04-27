@@ -2,10 +2,10 @@
 
 ## Repo / infra
 
-- [x] clone upstream NOVA3R under `projects/`
-- [x] create proposal branch
+- [x] fold the proposal workspace into the integrated `PSUVPSC3DD_repo`
+- [x] vendor the minimum external code needed for the first loop (`third_party/vggt`, `dust3r/datasets`, `datasets_preprocess`)
 - [x] scaffold docs / configs / probe package / launcher scripts
-- [ ] decide whether to keep this as a pure local branch or mirror to a remote fork later
+- [ ] decide whether this repo will remain local-first or be mirrored to a cleaner remote research fork later
 
 ## Canonical decoder
 
@@ -29,6 +29,8 @@
 
 ## Paper-facing analysis
 
+- [ ] narrow the **first paper scope**: image/geometry only vs image+video
 - [ ] lock the main claim / experiment matrix
 - [ ] define main-table columns before running large sweeps
+- [ ] decide which backbones belong in the first serious matrix versus later extensions
 - [ ] decide which ablations stay in the main paper vs appendix

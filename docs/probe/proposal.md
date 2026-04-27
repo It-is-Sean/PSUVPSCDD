@@ -101,3 +101,22 @@ Record both signals instead of collapsing everything to one scalar.
 - easy experiment bookkeeping
 - explicit fairness / stress-test configuration
 - future extension to more decoder families without rewriting the whole tree
+
+## Current executable interpretation
+
+Reading this proposal against the current codebase, the most realistic interpretation is:
+
+- the **core scientific bet** is not “can an agent benchmark many models,” but whether a **shared complete-3D decoder** exposes structure that shallow readouts miss
+- the most natural first milestone is **image / geometry backbones first**, because the current infra, available checkpoints, and current code already lean that way
+- the video part is still important conceptually, but right now it reads more like a strong extension than the first thing to operationalize
+
+## Suggested first-paper narrowing
+
+If the goal is to get to a credible paper instead of a sprawling platform, the cleanest early slice is probably:
+
+1. freeze the decoder family around NOVA3R Stage 1
+2. compare a small set of image/geometry backbones under the same adapter budget
+3. report shared-decoding signal vs direct-readout signal
+4. make visible-vs-unseen behavior the main stress test
+
+That would preserve the core proposal idea while avoiding premature scope blow-up from too many backbone families and the video branch too early.

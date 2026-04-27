@@ -1,9 +1,10 @@
 # Experiment plan
 
-## Phase 0 — Branch setup (done)
+## Phase 0 — Integrated workspace setup (done)
 
-- clone upstream NOVA3R into `projects/`
-- create a dedicated proposal branch
+- import the upstream NOVA3R base into the current repo
+- merge the separate proposal/probe attempt into the same working tree
+- vendor the minimum external code needed for the first probe loop (`third_party/vggt/`, `dust3r/datasets/`, `datasets_preprocess/`)
 - scaffold docs / configs / probe package / launch scripts
 
 ## Phase 1 — Canonical decoder inventory
@@ -38,12 +39,16 @@ Deliverables:
 - run small-adapter sanity experiments
 - produce the first within-family rankings
 
-## Phase 5 — Video extensions
+## Phase 5 — Video extensions (only after image/geometry path is credible)
 
 Deliverables:
 - timestep sweep in a limited early/mid window
 - within-video-family comparison
 - first cross-family comparison with explicit caveats
+
+Scope discipline note:
+- the proposal is intentionally broad, but the executable first paper path should probably stabilize on **image / geometry backbones first**
+- video should be treated as a second-wave extension unless the shared-decoder protocol is already convincing on the image/geometry side
 
 ## Phase 6 — Paper-facing outputs
 

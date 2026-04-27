@@ -55,4 +55,15 @@ Reusable rendering utilities remain in:
 ## Current state
 
 The workspace is ready for research planning and incremental implementation.
-The launcher scripts currently materialize run manifests / sweep plans rather than launching full training. That is deliberate: the method framing is in place, but actual backbone wiring and trainer loops still need to be filled in.
+
+Important nuance:
+
+- the **structured probe workspace** (`scripts/probe/`, `configs/probe/`, `nova3r/probe/`) is still partly scaffold-level, especially for generic training/evaluation launchers
+- the **concrete fast-moving experiment path** currently lives more in `experiments/probe3d/`, where actual adapter-training code already exists
+
+So the repo should be read as having:
+
+1. a cleaner long-horizon research interface
+2. a messier but more executable probe3d path
+
+The documentation should keep these two layers distinct instead of implying that the whole repo is already uniformly wired end-to-end.

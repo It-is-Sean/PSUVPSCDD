@@ -79,3 +79,4 @@ The fork compares two probe signals under a unified protocol:
 3. Replace the current training-free bridge with the intended small learned adapter.
 4. Add a NOVA3R-native feature path as an internal control.
 5. Start measuring visible vs unseen-region behavior once the first runnable path is stable.
+6. Before expanding to video, lock whether the **first paper scope** should stay image/geometry-only for a cleaner initial claim.
