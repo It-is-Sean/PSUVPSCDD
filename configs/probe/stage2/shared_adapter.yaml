@@ -1,0 +1,19 @@
+adapter:
+  name: SceneTokenAdapter
+  input_dim: 1024
+  token_dim: 768
+  scene_tokens: 32
+  num_heads: 8
+  cross_attn_layers: 1
+  refinement_layers: 0
+  mlp_ratio: 4.0
+  dropout: 0.0
+  max_source_tokens: 8192
+  trainable_scene_queries: true
+  stabilization:
+    use_velocity_matching: true
+    lambda_vel: 0.1
+  regime: small
+  notes:
+    - Keep the default adapter intentionally small.
+    - Stronger adapters are robustness checks, not the main measurement regime.

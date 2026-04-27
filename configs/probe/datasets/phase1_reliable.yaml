@@ -1,0 +1,24 @@
+datasets:
+  phase1_reliable:
+    - name: scrream
+      status: repo_ready
+      role: early sanity / evaluation path already exists upstream
+    - name: 3dfront
+      status: used_by_nova3r_training
+      role: candidate canonical-decoder supervision source
+    - name: scannetpp
+      status: used_by_nova3r_training
+      role: candidate canonical-decoder supervision source
+  phase2_extension:
+    - name: tbd_operational_complete_targets
+      status: placeholder
+      role: broader generalization / noisier complete-geometry approximation
+
+visibility_protocol:
+  z_buffer_tolerance: 0.01
+  visible_split: points visible in at least one input view
+  unseen_split: complement of visible split inside the complete target
+
+input_regimes:
+  low_view_k: [1, 2, 4, 8]
+  video_frame_sampling: [uniform, reference_anchored]

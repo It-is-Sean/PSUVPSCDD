@@ -21,6 +21,86 @@ from pytorch3d.ops import knn_points
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 
+
+def _build_renderer(point_cloud: Pointclouds,
+                    distance: float,
+                    elevation: float,
+                    azim: float,
+                    image_size: int,
+                    radius: float,
+                    points_per_pixel: int,
+                    background_color=(1.0, 1.0, 1.0),
+                    compositor: str = "alpha") -> PointsRenderer:
+    raster_settings = PointsRasterizationSettings(
+        image_size=image_size,
+        radius=radius,
+        points_per_pixel=points_per_pixel,
+    )
+
+    R, T = look_at_view_transform(distance, elevation, azim)
+    cameras = FoVOrthographicCameras(device=point_cloud.device, R=R, T=T, znear=0.01)
+    rasterizer = PointsRasterizer(cameras=cameras, raster_settings=raster_settings)
+    if compositor == "alpha":
+        compositor_impl = AlphaCompositor(background_color=background_color)
+    elif compositor == "normweighted":
+        compositor_impl = NormWeightedCompositor(background_color=background_color)
+    else:
+        raise ValueError(f"Unknown compositor '{compositor}'. Use 'alpha' or 'normweighted'.")
+
+    return PointsRenderer(rasterizer=rasterizer, compositor=compositor_impl)
+
+
+def render_pointcloud_frame(point_cloud: Pointclouds,
+                            distance: float = 20,
+                            elevation: float = 10,
+                            azim: float = 0,
+                            image_size: int = 512,
+                            radius: float = 0.003,
+                            points_per_pixel: int = 10,
+                            background_color=(1.0, 1.0, 1.0),
+                            compositor: str = "alpha") -> np.ndarray:
+    renderer = _build_renderer(
+        point_cloud=point_cloud,
+        distance=distance,
+        elevation=elevation,
+        azim=azim,
+        image_size=image_size,
+        radius=radius,
+        points_per_pixel=points_per_pixel,
+        background_color=background_color,
+        compositor=compositor,
+    )
+    images = renderer(point_cloud)
+    img = images[0, ..., :3].detach().cpu().numpy()
+    img = (img * 255).clip(0, 255).astype(np.uint8)
+    return img
+
+
+def save_pointcloud_frame(point_cloud: Pointclouds,
+                          outfile: str,
+                          distance: float = 20,
+                          elevation: float = 10,
+                          azim: float = 0,
+                          image_size: int = 512,
+                          radius: float = 0.003,
+                          points_per_pixel: int = 10,
+                          background_color=(1.0, 1.0, 1.0),
+                          compositor: str = "alpha") -> None:
+    os.makedirs(os.path.dirname(outfile), exist_ok=True)
+    img = render_pointcloud_frame(
+        point_cloud=point_cloud,
+        distance=distance,
+        elevation=elevation,
+        azim=azim,
+        image_size=image_size,
+        radius=radius,
+        points_per_pixel=points_per_pixel,
+        background_color=background_color,
+        compositor=compositor,
+    )
+    imageio.imwrite(outfile, img)
+    print(f"Saved preview to {outfile}")
+
 def smooth_pointcloud_surface(point_cloud: Pointclouds, device: torch.device, 
                              num_iterations: int = 3, 
                              neighbor_size: int = 30) -> Pointclouds:
@@ -271,6 +351,51 @@ def add_bounding_box_points(point_cloud: Pointclouds, device: torch.device,
     return Pointclouds(points=[merged_pts.to(device)], features=[merged_feats.to(device)])
 
 
+def prepare_pointcloud_from_ply(ply_path: str,
+                                device: torch.device,
+                                remove_outlier: bool = True,
+                                pca: bool = False,
+                                obb: bool = False,
+                                floor: bool = False,
+                                flip_axis_name: str = None,
+                                center: bool = False,
+                                normal_neighbors: int = 60,
+                                color_type: str = 'viridis',
+                                bbox: bool = False,
+                                bbox_steps: int = 100,
+                                bbox_color=(1.0, 0.0, 0.0),
+                                bbox_pca_clip: float = 0.0) -> Pointclouds:
+    point_cloud = load_ply_pointcloud(ply_path, device=device, remove_outlier=remove_outlier)
+    if pca:
+        point_cloud = pca_align_pointcloud(point_cloud)
+    if obb:
+        point_cloud = obb_align_pointcloud(point_cloud)
+    if flip_axis_name:
+        point_cloud = flip_axis(point_cloud, axis=flip_axis_name)
+    if floor:
+        point_cloud = place_on_floor(point_cloud, axis="z")
+    if center:
+        point_cloud = center_pointcloud(point_cloud)
+
+    point_cloud = build_colored_pointcloud(
+        point_cloud,
+        device=device,
+        normal_neighbors=normal_neighbors,
+        color_type=color_type,
+    )
+
+    if bbox:
+        point_cloud = add_bounding_box_points(
+            point_cloud,
+            device=device,
+            color=tuple(bbox_color),
+            steps=bbox_steps,
+            pca_clip=bbox_pca_clip,
+        )
+
+    return point_cloud
+
+
 def render_turntable_video(point_cloud: Pointclouds,
                             num_frames: int = 120,
                             distance: float = 20,
@@ -286,30 +411,21 @@ def render_turntable_video(point_cloud: Pointclouds,
                             outfile: str = "outputs/pointcloud_360_normals.mp4"):
     os.makedirs(os.path.dirname(outfile), exist_ok=True)
 
-    raster_settings = PointsRasterizationSettings(
-        image_size=image_size,
-        radius=radius,
-        points_per_pixel=points_per_pixel,
-    )
-
     frames = []
     azims = np.linspace(azim_start, azim_end, num_frames, endpoint=False)
 
     for azim in azims:
-        R, T = look_at_view_transform(distance, elevation, azim)
-        cameras = FoVOrthographicCameras(device=point_cloud.device, R=R, T=T, znear=0.01)
-        rasterizer = PointsRasterizer(cameras=cameras, raster_settings=raster_settings)
-        if compositor == "alpha":
-            compositor_impl = AlphaCompositor(background_color=background_color)
-        elif compositor == "normweighted":
-            compositor_impl = NormWeightedCompositor(background_color=background_color)
-        else:
-            raise ValueError(f"Unknown compositor '{compositor}'. Use 'alpha' or 'normweighted'.")
-
-        renderer = PointsRenderer(rasterizer=rasterizer, compositor=compositor_impl)
-        images = renderer(point_cloud)
-        img = images[0, ..., :3].detach().cpu().numpy()
-        img = (img * 255).clip(0, 255).astype(np.uint8)
+        img = render_pointcloud_frame(
+            point_cloud=point_cloud,
+            distance=distance,
+            elevation=elevation,
+            azim=azim,
+            image_size=image_size,
+            radius=radius,
+            points_per_pixel=points_per_pixel,
+            background_color=background_color,
+            compositor=compositor,
+        )
         frames.append(img)
 
     try:
@@ -372,29 +488,22 @@ def main():
         raise ValueError("When using --ply-folder, also provide --save-folder.")
 
     def render_one(ply_path: str, out_path: str) -> None:
-        point_cloud = load_ply_pointcloud(ply_path, device=device, remove_outlier=True)
-        if args.pca:
-            point_cloud = pca_align_pointcloud(point_cloud)
-        if args.obb:
-            point_cloud = obb_align_pointcloud(point_cloud)
-        if args.flip_axis:
-            point_cloud = flip_axis(point_cloud, axis=args.flip_axis)
-        if args.floor:
-            point_cloud = place_on_floor(point_cloud, axis="z")
-        if args.center:
-            point_cloud = center_pointcloud(point_cloud)
-        point_cloud_normals = build_colored_pointcloud(
-            point_cloud, device=device, normal_neighbors=args.normal_neighbors,
-            color_type=args.color_type
+        point_cloud_normals = prepare_pointcloud_from_ply(
+            ply_path=ply_path,
+            device=device,
+            remove_outlier=True,
+            pca=args.pca,
+            obb=args.obb,
+            floor=args.floor,
+            flip_axis_name=args.flip_axis,
+            center=args.center,
+            normal_neighbors=args.normal_neighbors,
+            color_type=args.color_type,
+            bbox=args.bbox,
+            bbox_steps=args.bbox_steps,
+            bbox_color=tuple(args.bbox_color),
+            bbox_pca_clip=args.bbox_pca_clip,
         )
-        if args.bbox:
-            point_cloud_normals = add_bounding_box_points(
-                point_cloud_normals,
-                device=device,
-                color=tuple(args.bbox_color),
-                steps=args.bbox_steps,
-                pca_clip=args.bbox_pca_clip,
-            )
 
         azim_end = args.azim_end
         if azim_end is None:

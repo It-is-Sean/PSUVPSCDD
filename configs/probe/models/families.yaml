@@ -1,0 +1,39 @@
+models:
+  image_geometry:
+    - name: nova3r
+      status: nearest_term
+      candidate_layers: [mid, final]
+      notes: reuse upstream codebase first
+    - name: vggt
+      status: planned
+      candidate_layers: [mid, final]
+    - name: da3
+      status: planned
+      candidate_layers: [mid, final]
+    - name: dust3r
+      status: planned
+      candidate_layers: [mid, final]
+    - name: mast3r
+      status: planned
+      candidate_layers: [mid, final]
+    - name: pi3
+      status: planned
+      candidate_layers: [mid, final]
+
+  video:
+    - name: wan2.1
+      status: planned
+      candidate_layers: [mid, final]
+      timestep_window: early_mid
+    - name: open_sora_2.0
+      status: planned
+      candidate_layers: [mid, final]
+      timestep_window: early_mid
+    - name: cogvideox
+      status: planned
+      candidate_layers: [mid, final]
+      timestep_window: early_mid
+    - name: v_jepa
+      status: planned
+      candidate_layers: [mid, final]
+      timestep_window: none

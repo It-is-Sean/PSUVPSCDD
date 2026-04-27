@@ -8,11 +8,13 @@ tqdm
 opencv-python
 matplotlib
 trimesh
+Pillow
 roma
 
 # Config
 omegaconf
 hydra-core
+accelerate
 
 # 3D reconstruction
 diffusers

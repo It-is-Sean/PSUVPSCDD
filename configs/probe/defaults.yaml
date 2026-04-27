@@ -1,0 +1,24 @@
+project:
+  name: shared_complete_3d_probe
+  branch: proposal/shared-complete-3d-probe
+  repo_root: .
+  output_root: artifacts
+  seed: 3407
+
+artifacts:
+  features: artifacts/features
+  checkpoints: artifacts/checkpoints
+  reports: artifacts/reports
+  tables: artifacts/tables
+  figures: artifacts/figures
+  logs: artifacts/logs
+  manifests: artifacts/manifests
+
+configs:
+  canonical: configs/probe/stage1/canonical_decoder.yaml
+  adapter: configs/probe/stage2/shared_adapter.yaml
+  direct: configs/probe/stage3/direct_baseline.yaml
+  datasets: configs/probe/datasets/phase1_reliable.yaml
+  models: configs/probe/models/families.yaml
+  stress: configs/probe/stress/low_view_unseen.yaml
+  sweeps: configs/probe/sweeps/layer_timestep.yaml

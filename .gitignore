@@ -16,11 +16,12 @@ env/
 *.log
 wandb/
 runs/
+tensorboard/
 outputs/
 eval_results/
 
 # Datasets and checkpoints
-datasets/
+/datasets/
 data/*/
 !data/scrream/
 !data/scrream/**
@@ -31,9 +32,28 @@ checkpoints/
 *.safetensors
 
 # Probe artifacts
+artifacts/features/
+artifacts/checkpoints/
+artifacts/reports/
+artifacts/tables/
+artifacts/figures/
+artifacts/logs/
 experiments/probe3d/features/
 experiments/probe3d/checkpoints/
 experiments/probe3d/outputs/
+experiments/probe3d/result/
+experiments/probe3d/adapter_data_test/
+
+# Large geometry / video outputs
+*.ply
+*.obj
+*.glb
+*.mp4
+*.npz
+*.npy
+
+# Notebook noise
+.ipynb_checkpoints/
 
 # System files
 .DS_Store

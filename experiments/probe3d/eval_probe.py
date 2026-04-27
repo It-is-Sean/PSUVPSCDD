@@ -28,6 +28,20 @@ def parse_args():
     return parser.parse_args()
 
 
+def write_point_cloud_ply(path, points):
+    points = points.detach().cpu().float()
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("ply\n")
+        handle.write("format ascii 1.0\n")
+        handle.write(f"element vertex {points.shape[0]}\n")
+        handle.write("property float x\n")
+        handle.write("property float y\n")
+        handle.write("property float z\n")
+        handle.write("end_header\n")
+        for point in points.tolist():
+            handle.write(f"{point[0]} {point[1]} {point[2]}\n")
+
+
 def main():
     args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -61,6 +75,7 @@ def main():
     total = 0.0
     count = 0
     predictions = []
+    target_points = []
     scene_ids = []
     with torch.no_grad():
         for batch in loader:
@@ -72,6 +87,7 @@ def main():
             count += features.shape[0]
             if args.save_predictions:
                 predictions.append(pred.cpu())
+                target_points.append(targets.cpu())
                 scene_ids.extend(batch["scene_id"])
 
     avg = total / max(count, 1)
@@ -79,8 +95,14 @@ def main():
     if args.save_predictions:
         os.makedirs(args.output_dir, exist_ok=True)
         path = os.path.join(args.output_dir, "predictions.pt")
-        torch.save({"scene_ids": scene_ids, "pred_points": torch.cat(predictions, dim=0)}, path)
+        pred_tensor = torch.cat(predictions, dim=0)
+        target_tensor = torch.cat(target_points, dim=0)
+        torch.save({"scene_ids": scene_ids, "pred_points": pred_tensor, "target_points": target_tensor}, path)
         print(f"Saved predictions to {path}")
+        for scene_id, pred_points, gt_points in zip(scene_ids, pred_tensor, target_tensor):
+            write_point_cloud_ply(os.path.join(args.output_dir, f"{scene_id}_pred.ply"), pred_points)
+            write_point_cloud_ply(os.path.join(args.output_dir, f"{scene_id}_gt.ply"), gt_points)
+        print(f"Saved PLY point clouds to {args.output_dir}")
 
 
 if __name__ == "__main__":
