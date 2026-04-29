@@ -33,6 +33,7 @@ It supersedes older numeric-only notes when conflicts appear.
      - F@0.05 mean/median: `0.291 / 0.275`; precision@0.05 mean `0.204`; recall@0.05 mean `0.532`
      - worst sample is `scene0000_02_00154/00155` with F@0.05 `0.0266`, confirming severe precision/outlier failures on some rows despite decent recall on others.
      - Outputs: `experiments/probe3d/result/autoresearch_probe/p5_k2_adjacent_anchor_mlp_l4_chamfer_step1000/robust_eval_fixed30/summary.json`; representative best/median/worst renders in sibling `robust_eval_fixed30_representative_renders/`.
+     - Failure-case audit now also available: `experiments/probe3d/result/autoresearch_probe/p5_k2_adjacent_anchor_mlp_l4_chamfer_step1000/robust_eval_fixed30/failure_case_audit/failure_case_audit.md`. It ranks fixed-30 rows and confirms the dominant symptom is prediction-side precision/outliers: median recall-minus-precision gap at tau=0.05 is `0.3126`, pred→GT p90 correlates strongly with F@0.05 (`r=-0.8263`), and the worst row is `scene0000_02_00154/00155` with F@0.05 `0.0266`.
 
 4. **GT quality correction**
    - GT-only visual audit showed the three ScanNet target modes are not dramatically different by eye.
