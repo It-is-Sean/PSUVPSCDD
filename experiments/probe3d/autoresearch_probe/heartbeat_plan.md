@@ -79,3 +79,6 @@ Jiacheng asked to use AutoResearchClaw as a reference. Local install: `/home/jcd
 ## Local autopilot replaces ResearchClaw full pipeline
 
 ResearchClaw full pipeline is no longer used for automatic project execution because it drifted into unrelated CIFAR/KD/FitNet experiments. Future autonomous progress should use `local_autopilot_prompt.md` and the local `autoresearch_probe` harness. The only retained ResearchClaw value is high-level planning inspiration and the archived artifacts under ignored result directories.
+## Feishu reporting language
+
+All Feishu progress follow-ups to Jiacheng must be in Chinese unless Jiacheng explicitly asks for another language.

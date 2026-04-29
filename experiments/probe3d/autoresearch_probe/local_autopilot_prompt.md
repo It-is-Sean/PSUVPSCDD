@@ -43,3 +43,6 @@ Do **not** run AutoResearchClaw full pipeline. Its previous full run drifted int
 2. Render representative success/failure cases from that fixed eval.
 3. Compare a proposal-aligned candidate (cross-attention/query-conditioned adapter or pseudo-GT/token-distillation diagnostic) under the same protocol.
 4. Keep repo clean and commit meaningful code/doc changes so Jiacheng can pull from another server.
+## Feishu reporting language
+
+All Feishu progress follow-ups to Jiacheng must be in Chinese unless Jiacheng explicitly asks for another language.
