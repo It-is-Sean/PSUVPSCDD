@@ -154,3 +154,9 @@
 - Action: disabled all OpenClaw cron jobs, stopped the ResearchClaw proxy, and added `local_autopilot_prompt.md` to define a 15-minute local project autopilot based on our own `autoresearch_probe` harness rather than ResearchClaw.
 - Result: ResearchClaw full pipeline is retired for execution. Future autonomous work should focus on fixed-sample robust eval, rendering, and proposal-aligned adapter/pseudo-GT controls.
 - Next: install a new 15-minute local autopilot cron and start with fixed-30 robust evaluation for the current MLP baseline.
+
+## 2026-04-29 15:20 CST — Local autopilot
+- Checked: branch `wip/psuvpsc3dd-autoresearch-20260429`; no active train/oracle/eval GPU processes; all 8 RTX 3090s idle/healthy. Reviewed local autopilot prompt, current state, heartbeat log, and git organization notes. The previous fixed-30 robust eval had completed.
+- Action: parsed `robust_eval_fixed30/summary.json`, selected worst/median/best cases by F@0.05, and rendered representative pred-vs-GT PNGs plus copied input contact sheets under `robust_eval_fixed30_representative_renders/`. Updated `CURRENT_STATE.md` with fixed-30 aggregate metrics and retired ResearchClaw as an active driver.
+- Result: fixed-30 baseline confirms the MLP checkpoint is recall-heavy but precision-poor: symmetric CD mean/median `0.0504/0.0381`, F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204` vs recall@0.05 mean `0.532`; worst row `scene0000_02_00154/00155` has F@0.05 only `0.0266`. Representative renders are in `experiments/probe3d/result/autoresearch_probe/p5_k2_adjacent_anchor_mlp_l4_chamfer_step1000/robust_eval_fixed30_representative_renders/`.
+- Next: inspect those representative cases for systematic failure causes, then run a same-protocol comparison for one structured/query-conditioned adapter or pseudo-GT/token-distillation diagnostic rather than continuing blind MLP sweeps.

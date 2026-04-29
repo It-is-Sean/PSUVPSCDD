@@ -25,31 +25,32 @@ It supersedes older numeric-only notes when conflicts appear.
      - recall@0.05 mean: `0.536`
    - Interpretation: not just missing coverage; predictions are loose/outlier-heavy and visually poor.
 
+   - Fixed-30 robust eval for the same checkpoint completed on 10 scenes x 3 samples (K2, interval=1):
+     - symmetric CD mean/median/p90: `0.0504 / 0.0381 / 0.0639`
+     - trimmed CD95 mean/median: `0.0335 / 0.0265`
+     - pred→GT mean distance mean/median: `0.151 / 0.142`
+     - GT→pred mean distance mean/median: `0.069 / 0.067`
+     - F@0.05 mean/median: `0.291 / 0.275`; precision@0.05 mean `0.204`; recall@0.05 mean `0.532`
+     - worst sample is `scene0000_02_00154/00155` with F@0.05 `0.0266`, confirming severe precision/outlier failures on some rows despite decent recall on others.
+     - Outputs: `experiments/probe3d/result/autoresearch_probe/p5_k2_adjacent_anchor_mlp_l4_chamfer_step1000/robust_eval_fixed30/summary.json`; representative best/median/worst renders in sibling `robust_eval_fixed30_representative_renders/`.
+
 4. **GT quality correction**
    - GT-only visual audit showed the three ScanNet target modes are not dramatically different by eye.
    - Current failure should not be blamed solely on dirty GT.
 
-## Active ResearchClaw integration
+## Active local autopilot
 
-- Config: `researchclaw/config.arc.yaml`
-- Prompt guardrails: `researchclaw/prompts.psuvpsc3dd.yaml`
-- Local Responses compatibility proxy: `researchclaw/openclaw_stream_proxy.js`
-- Current run: `experiments/probe3d/result/researchclaw/run_20260429_135015`
-- Supervisor cron: `PSUVPSC3DD AutoResearchClaw supervisor`, every 15 minutes.
+AutoResearchClaw full-pipeline execution is retired for this project. Its previous run drifted into irrelevant CIFAR/KD/FitNet work, so it should only be treated as a rejected artifact/reference, not as an experiment driver. Current autonomous progress uses the local harness under `experiments/probe3d/autoresearch_probe/` and the OpenClaw cron `PSUVPSC3DD local autopilot` every 15 minutes.
 
-ResearchClaw is allowed to help organize the work, but its outputs must be audited against the proposal:
+Local autopilot guardrails:
 
-- frozen visual backbone;
-- frozen NOVA3R-style complete-3D decoder;
-- train only lightweight/structured adapters;
-- complete/amodal sparse-input-frustum reconstruction;
-- visual-first robust evaluation;
-- no claims from old `max_interval=30` runs or single-sample CD.
-
-If ResearchClaw external web search drifts into irrelevant sources, redirect it to local repo audit and proposal-specific evidence.
+- stay inside the proposal: frozen visual backbone/VGGT-style features, lightweight or structured adapter, frozen NOVA3R-style complete-3D decoder;
+- use corrected ScanNet `scannet_max_interval=1`;
+- make claims only from fixed-sample robust/visual-first evaluation, not old `max_interval=30` runs, two-sample oracle rankings, or single-sample Chamfer;
+- keep outputs under `experiments/probe3d/result/` unless source/docs changes are intentional.
 
 ## Next clean research step
 
-1. Expand robust eval from 5 samples to the fixed 30-sample manifest.
-2. Render representative success/failure cases.
-3. Compare a structured adapter or pseudo-GT checkpoint under the same robust protocol.
+1. Use the fixed-30 robust eval + best/median/worst renders to diagnose what differentiates success/failure cases.
+2. Compare at least one proposal-aligned candidate under the same robust protocol: either a structured/query-conditioned adapter checkpoint or a pseudo-GT/token-distillation diagnostic.
+3. Keep source/docs tidy and commit small logical updates on `wip/psuvpsc3dd-autoresearch-20260429`.
