@@ -1,18 +1,18 @@
 # PROJECT.md
 
-## Current canonical state — 2026-04-29 afternoon
+## Current canonical state — 2026-04-29 late afternoon
 
-AutoResearchClaw is now installed and running as an orchestration layer, with a 15-minute OpenClaw supervisor that audits process status, proposal alignment, and code diffs. The ResearchClaw integration lives under `researchclaw/`; generated ResearchClaw outputs stay under `experiments/probe3d/result/researchclaw/` and are gitignored by the existing result rules.
+The active branch is no longer driven by AutoResearchClaw/ResearchClaw. That full pipeline was retired after drifting into unrelated CIFAR-100 / KD / FitNet / ResNet-teacher experiments. The current driver is a local OpenClaw autopilot that reads and updates `experiments/probe3d/autoresearch_probe/` every 15 minutes, reports in Chinese on Feishu, and stays inside the PSUVPSC3DD proposal constraints.
 
 The current research interpretation is:
 
-- old ScanNet experiments with `max_interval=30` are confounded because the processed data already used `frame_skip=20`; use `scannet_max_interval=1` for the intended NOVA3R-style spacing;
+- old ScanNet experiments with `max_interval=30` are confounded because processed data already used `frame_skip=20`; use `scannet_max_interval=1` for the intended NOVA3R-style spacing;
 - the raw ScanNet GT audit did not show obviously catastrophic data quality;
 - oracle/CD rankings were unstable and should not drive claims;
-- the interval-corrected MLP baseline has coverage but poor precision/outlier control, so the next valid progress must improve robust visual-first metrics, not just symmetric CD.
+- the interval-corrected MLP baseline has coverage but poor precision/outlier control, so valid progress must improve robust visual-first metrics, not just symmetric CD;
+- the first lightweight cross-attention candidate (`p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000`) completed 1000 steps with validation CD `0.54222615`, so it is not an immediate scalar improvement over MLP; judge it only after fixed-30 robust eval and renders.
 
-The immediate project contract is described in `experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`.
-
+The immediate handoff contract is described in `docs/probe/handoff_2026-04-29.md` and `experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`.
 
 ## Project identity
 

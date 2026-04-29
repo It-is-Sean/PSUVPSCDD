@@ -35,6 +35,12 @@ It supersedes older numeric-only notes when conflicts appear.
      - Outputs: `experiments/probe3d/result/autoresearch_probe/p5_k2_adjacent_anchor_mlp_l4_chamfer_step1000/robust_eval_fixed30/summary.json`; representative best/median/worst renders in sibling `robust_eval_fixed30_representative_renders/`.
      - Failure-case audit now also available: `experiments/probe3d/result/autoresearch_probe/p5_k2_adjacent_anchor_mlp_l4_chamfer_step1000/robust_eval_fixed30/failure_case_audit/failure_case_audit.md`. It ranks fixed-30 rows and confirms the dominant symptom is prediction-side precision/outliers: median recall-minus-precision gap at tau=0.05 is `0.3126`, pred→GT p90 correlates strongly with F@0.05 (`r=-0.8263`), and the worst row is `scene0000_02_00154/00155` with F@0.05 `0.0266`.
 
+
+4. **Cross-attention candidate status**
+   - `p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000` completed 1000 steps with K2, `scannet_max_interval=1`, `anchor_frustum`, cross-attention L2/H512, and `chamfer_sample`.
+   - Validation CD at step 1000 was `0.54222615`, so this is not a scalar improvement over the MLP-L4/chamfer baseline.
+   - A fixed-30 robust eval was launched at `experiments/probe3d/result/autoresearch_probe/p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000/robust_eval_fixed30/`; use that plus renders before interpreting whether cross-attention improves precision/outlier behavior.
+
 4. **GT quality correction**
    - GT-only visual audit showed the three ScanNet target modes are not dramatically different by eye.
    - Current failure should not be blamed solely on dirty GT.
@@ -52,6 +58,7 @@ Local autopilot guardrails:
 
 ## Next clean research step
 
-1. Use the fixed-30 robust eval + best/median/worst renders to diagnose what differentiates success/failure cases.
-2. Compare at least one proposal-aligned candidate under the same robust protocol: either a structured/query-conditioned adapter checkpoint or a pseudo-GT/token-distillation diagnostic.
-3. Keep source/docs tidy and commit small logical updates on `wip/psuvpsc3dd-autoresearch-20260429`.
+1. Finish or inspect fixed-30 robust eval for `p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000`.
+2. Compare cross-attention vs MLP by F@0.05, precision@0.05, pred→GT outlier statistics, and representative renders.
+3. If cross-attention does not improve precision/outlier behavior, move to token-distillation / pseudo-GT diagnostics rather than more blind adapter-capacity sweeps.
+4. Keep source/docs tidy and commit small logical updates on `wip/psuvpsc3dd-autoresearch-20260429`.

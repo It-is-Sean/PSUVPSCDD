@@ -10,10 +10,20 @@ A major audit corrected the interpretation of the ScanNet runs:
 - Oracle CD rankings were dominated by tiny sample counts, stochastic decoder sampling, flow-vs-CD mismatch, and outlier samples; they are no longer treated as reliable target-mode rankings.
 - Robust evaluation of the interval-corrected MLP baseline shows moderate recall but poor precision/outlier control, matching the qualitative failure.
 
-AutoResearchClaw was installed and configured as a research-loop organizer. A local proxy bridges ResearchClaw to the OpenClaw-configured model provider, and a separate 15-minute OpenClaw supervisor audits ResearchClaw outputs for proposal alignment and code cleanliness.
+AutoResearchClaw was briefly installed and configured as a research-loop organizer, but its full-pipeline execution was retired on 2026-04-29 after proposal drift into unrelated CIFAR/KD/FitNet work. The current active automation is local OpenClaw autopilot over `experiments/probe3d/autoresearch_probe/`.
 
 
 This document records what actually happened, including corrections.
+
+## 2026-04-29 late-afternoon handoff update
+
+ResearchClaw full-pipeline execution is retired for this project. The previous ResearchClaw run drifted into unrelated CIFAR/KD/FitNet/ResNet-teacher experiments, so its later stage artifacts are rejected as execution guidance. The retained automation is a local OpenClaw autopilot over `experiments/probe3d/autoresearch_probe/`, with Chinese Feishu follow-ups and fixed proposal guardrails.
+
+The repository was pushed to `dongjiacheng06/3dprobe` on branch `wip/psuvpsc3dd-autoresearch-20260429` for server handoff. See `docs/probe/handoff_2026-04-29.md`.
+
+Fixed-30 robust eval of the K2/interval=1 MLP-L4/chamfer baseline confirmed the main failure mode: F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204`, recall@0.05 mean `0.532`, with strong prediction-side outlier issues.
+
+A lightweight K2/interval=1 cross-attention candidate (`p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000`) completed 1000 steps with validation CD `0.54222615`. This is not a scalar improvement over MLP and should only be interpreted after fixed-30 robust eval/renders.
 
 ## 1. Major correction — old SCRREAM results are invalid for claims
 
@@ -166,7 +176,7 @@ The key learning is: direct rollout Chamfer fixes a large train/eval objective m
 
 ## 7. Bottom line
 
-The cleanest honest reading of the repo today is:
+The cleanest honest reading of the repo on 2026-04-29 is:
 
 - old SCRREAM eval-subset claims are invalid
 - the engineering stack survived that correction

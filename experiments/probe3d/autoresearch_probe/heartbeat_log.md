@@ -178,3 +178,9 @@
 - Action: added and launched trial `p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000`: K=2, `scannet_max_interval=1`, `anchor_frustum`, lightweight cross-attention adapter L2/H512, direct `chamfer_sample`, 1000 steps, 8-GPU NCCL. Output dir: `experiments/probe3d/result/autoresearch_probe/p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000`.
 - Result: torchrun launched successfully and ScanNet loaders are building/running. This is a bounded candidate to compare against the MLP fixed-30 robust baseline, with acceptance based on F@0.05 / precision-side metrics and representative renders rather than symmetric CD alone.
 - Next: monitor step500/step1000 validation; if checkpoint is produced, run fixed-30 robust eval and representative renders for the cross-attention candidate.
+
+## 2026-04-29 16:25 CST — Neat handoff cleanup
+- Checked: Jiacheng requested `/neat`. Reviewed project root/docs/autoresearch state, remote handoff status, latest p7 cross-attention result, and fixed-30 eval process.
+- Action: synchronized README/PROJECT/docs/probe/CURRENT_STATE with the retired-ResearchClaw/local-autopilot state, GitHub remote branch, fixed-30 MLP baseline, and p7 cross-attention candidate. Added `docs/probe/handoff_2026-04-29.md`.
+- Result: handoff docs now point to `dongjiacheng06/3dprobe`, branch `wip/psuvpsc3dd-autoresearch-20260429`; p7 cross-attention is recorded as completed with validation CD `0.54222615`, pending fixed-30 robust interpretation.
+- Next: after fixed-30 robust eval finishes for p7, compare against the MLP baseline using F@0.05/precision/renders; if not better, move toward token-distillation or pseudo-GT diagnostics.

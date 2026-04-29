@@ -1,15 +1,15 @@
 # Experiment plan from the current state
 
-## Current plan override — 2026-04-29 afternoon
+## Current plan override — 2026-04-29 late afternoon
 
 Older phase labels below remain useful history, but the next valid plan is now:
 
-1. **Stabilize evaluation.** Use corrected `scannet_max_interval=1`, fixed scene/view/sample manifests, robust PLY metrics, and representative renders.
-2. **Treat MLP as baseline/failure mode.** Do not keep sweeping MLP losses just because CD changes.
-3. **Compare proposal-aligned alternatives.** Test structured cross-attention/query-conditioned adapters or pseudo-GT / token-distillation diagnostics under the same fixed robust protocol.
-4. **Let AutoResearchClaw organize, not redefine, the project.** ResearchClaw may write plans/stage artifacts, but it must respect the proposal: frozen visual backbone, frozen NOVA3R-style decoder, lightweight adapters, complete/amodal sparse-input-frustum reconstruction, visual-first robust evaluation.
-5. **Supervisor gate.** Every 15 minutes, OpenClaw audits ResearchClaw process/logs/artifacts/diffs and corrects drift early.
-
+1. **Use the corrected interval.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines.
+2. **Use fixed robust evaluation before claims.** Compare checkpoints on the fixed 30-sample K2/interval=1 manifest with one-sided distances, F-score thresholds, trimmed CD, and representative renders.
+3. **Treat MLP as a precision/outlier failure baseline.** The K2/interval=1 MLP-L4/chamfer checkpoint has fixed-30 F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204`, and recall@0.05 mean `0.532`.
+4. **Do not continue blind MLP sweeps.** Test structured/query-conditioned adapters or token/pseudo-GT diagnostics under the same robust protocol.
+5. **Current structured-adapter check.** `p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000` completed with validation CD `0.54222615`; it needs fixed-30 robust eval/renders before interpretation.
+6. **ResearchClaw boundary.** ResearchClaw full-pipeline execution is retired after proposal drift; only local repo/proposal-constrained audit ideas may be reused.
 
 This plan is intentionally short and tied to what is already real in the repo.
 

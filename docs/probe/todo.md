@@ -1,32 +1,38 @@
 # TODO
 
-## Active now — 2026-04-29 afternoon
+## Active now — 2026-04-29 late afternoon
 
-### Workspace / ResearchClaw supervision
-- [x] install AutoResearchClaw in isolated data-disk env
-- [x] run `researchclaw setup` and install OpenCode
-- [x] configure project-specific `researchclaw/config.arc.yaml`
-- [x] add local Responses proxy `researchclaw/openclaw_stream_proxy.js` for ResearchClaw LLM access
-- [x] start ResearchClaw run under `experiments/probe3d/result/researchclaw/`
-- [x] start 15-minute supervisor cron to audit ResearchClaw direction and code diffs
-- [ ] if ResearchClaw keeps drifting into irrelevant external search, redirect it to local repo audit / fixed eval protocol
+### Local autopilot / handoff
+- [x] retire ResearchClaw full-pipeline execution after CIFAR/KD/FitNet drift
+- [x] install 15-minute local OpenClaw autopilot for PSUVPSC3DD
+- [x] make Feishu autopilot follow-ups Chinese by default
+- [x] push branch `wip/psuvpsc3dd-autoresearch-20260429` to `dongjiacheng06/3dprobe`
+- [x] create this `/neat` handoff cleanup
 
 ### Corrected evaluation protocol
 - [x] mark old `max_interval=30` ScanNet runs as interval-confounded
 - [x] set intended ScanNet interval to `scannet_max_interval=1`
 - [x] add `robust_ply_metrics.py`
 - [x] add `eval_checkpoint_robust.py`
-- [x] evaluate current MLP baseline on 5 fixed samples
-- [ ] expand robust eval to the fixed 30-sample manifest
-- [ ] render representative success/failure cases from robust eval
-- [ ] compare at least one structured adapter / pseudo-GT candidate under the same protocol
+- [x] evaluate current MLP baseline on fixed 30-sample manifest
+- [x] render representative success/failure cases from fixed-30 robust eval
+- [x] add fixed-30 failure-case audit
+- [ ] inspect the current cross-attention candidate's fixed-30 robust eval once it finishes
+- [ ] compare cross-attention vs MLP using F@0.05 / precision / representative renders, not symmetric CD alone
+
+### Candidate experiments
+- [x] enable corrected-interval ScanNet controls for cross-attention adapter
+- [x] run one-batch cross-attention smoke test
+- [x] launch and finish `p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000` (`val_chamfer_l2=0.54222615`)
+- [ ] decide whether cross-attention has any qualitative precision benefit after fixed-30 eval/renders
+- [ ] if cross-attention is not better, prioritize token-distillation / pseudo-GT diagnostics over more adapter capacity sweeps
 
 ### Code/documentation hygiene
 - [x] move temporary DDP helper to `experiments/probe3d/autoresearch_probe/debug/init_distributed_smoke.py`
 - [x] add `.researchclaw_cache/` and local ResearchClaw secret patterns to `.gitignore`
 - [x] add `experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`
-- [ ] split or archive stale phase configs once ResearchClaw produces the next valid experiment plan
-- [ ] keep `README.md`, `PROJECT.md`, and `docs/probe/*` synchronized after each major correction
+- [x] keep `README.md`, `PROJECT.md`, and `docs/probe/*` synchronized for the 2026-04-29 handoff
+- [ ] archive or rename stale phase configs once the next stable experiment plan is chosen
 
 ---
 

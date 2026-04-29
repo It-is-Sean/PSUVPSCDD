@@ -1,21 +1,22 @@
 # PSUVPSC3DD / Probe Workspace
 
-## Current canonical status — 2026-04-29 afternoon
+## Current canonical status — 2026-04-29 late afternoon
 
-The active branch is now supervised by AutoResearchClaw, but the proposal remains the source of truth. See:
+This branch is now a **local-autopilot / handoff-ready research workspace**. The source of truth is:
 
 - `PROPOSAL.md`
 - `experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`
 - `experiments/probe3d/autoresearch_probe/heartbeat_log.md`
-- `researchclaw/config.arc.yaml`
+- `docs/probe/handoff_2026-04-29.md`
 
 Important corrections that override older sections below:
 
-1. **ScanNet view interval:** processed data already uses `frame_skip=20`; corrected experiments use `scannet_max_interval=1` (adjacent processed frames, roughly 20 raw frames). Older `max_interval=30` runs are interval-confounded.
-2. **Metric reliability:** single symmetric CD and two-sample oracle averages are diagnostic only. Current evaluation should use fixed samples, pred→GT precision, GT→pred recall, F-score thresholds, trimmed CD, and visual videos.
-3. **MLP baseline:** the best interval-corrected MLP checkpoint has poor precision/outlier behavior despite non-awful CD; it is a baseline/failure mode, not a strong proposal result.
-4. **Current next step:** expand robust evaluation to the fixed sample manifest and compare structured adapter / pseudo-GT candidates under the same protocol.
-
+1. **ResearchClaw retired as executor:** AutoResearchClaw/ResearchClaw full-pipeline execution drifted into irrelevant CIFAR/KD/FitNet experiments and is no longer used to drive this project. Current automation is the local OpenClaw autopilot over `experiments/probe3d/autoresearch_probe/`.
+2. **ScanNet view interval:** processed data already uses `frame_skip=20`; corrected experiments use `scannet_max_interval=1` (adjacent processed frames, roughly 20 raw frames). Older `max_interval=30` runs are interval-confounded.
+3. **Metric reliability:** single symmetric CD and two-sample oracle averages are diagnostic only. Current comparisons use fixed samples, pred→GT precision, GT→pred recall, F-score thresholds, trimmed CD, and representative renders.
+4. **Current MLP baseline:** K2/interval=1 `anchor_frustum + MLP-L4 + chamfer_sample` is recall-heavy but precision/outlier-poor on fixed-30 robust eval: F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204`, recall@0.05 mean `0.532`.
+5. **Latest structured-adapter check:** K2/interval=1 `anchor_frustum + cross_attention L2/H512 + chamfer_sample` completed 1000 steps with validation CD `0.54222615`, which is not better than the MLP baseline by scalar validation CD. Its fixed-30 robust eval was launched under the same protocol and should be inspected before any claim.
+6. **Remote handoff:** the current branch was pushed to GitHub at `dongjiacheng06/3dprobe`, branch `wip/psuvpsc3dd-autoresearch-20260429`, currently at commit `2f0e210` before the `/neat` cleanup commit.
 
 This repository is currently a **research execution workspace** around a simple question:
 

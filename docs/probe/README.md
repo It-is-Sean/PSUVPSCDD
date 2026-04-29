@@ -1,20 +1,20 @@
 # Probe Docs
 
-## Current canonical status — 2026-04-29 afternoon
+## Current canonical status — 2026-04-29 late afternoon
 
-For the latest autonomous/research-loop state, read:
+For the latest local-autopilot state, read:
 
 - `../../experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`
 - `../../experiments/probe3d/autoresearch_probe/heartbeat_log.md`
-- `../../researchclaw/config.arc.yaml`
+- `handoff_2026-04-29.md`
 
 Key corrections:
 
 - `scannet_max_interval=1` is now the intended setting because ScanNet preprocessing already uses `frame_skip=20`. Old `max_interval=30` K-view conclusions are invalid/confounded.
 - CD-only and two-sample oracle results are not claim-level evidence. Use fixed-sample robust metrics and visual audits.
 - The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
-- AutoResearchClaw is active as a proposal-aligned organizer, but its outputs are audited by a 15-minute supervisor for direction and code cleanliness.
-
+- AutoResearchClaw/ResearchClaw full-pipeline execution is retired for this project. Its old stage artifacts can be read as historical notes only, not as an experiment driver.
+- The current branch is pushed to GitHub as `dongjiacheng06/3dprobe`, branch `wip/psuvpsc3dd-autoresearch-20260429`.
 
 This folder records the proposal-facing execution state for the current adapter / decoder experiments.
 
