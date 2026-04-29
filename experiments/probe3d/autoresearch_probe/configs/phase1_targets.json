@@ -271,6 +271,29 @@
       "distributed_backend": "nccl",
       "resume": "/home/jcd/PSUVPSC3DD_repo/experiments/probe3d/result/autoresearch_probe/p1_adapter_anchor_frustum_mlp_l4_chamfer_lr1e5_refine_step2500/latest.pth",
       "notes": "Continue stable lr1e-5 refinement from step2500=0.08745259 to step3000"
+    },
+    {
+      "trial_id": "p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000",
+      "kind": "adapter",
+      "target_mode": "anchor_frustum",
+      "adapter": "cross_attention_l2_h512",
+      "adapter_type": "cross_attention",
+      "adapter_layers": 2,
+      "adapter_hidden_dim": 512,
+      "adapter_heads": 8,
+      "adapter_mlp_ratio": 2.0,
+      "loss": "chamfer_sample",
+      "steps": 1000,
+      "val_every": 500,
+      "save_every": 500,
+      "num_views": 2,
+      "max_interval": 1,
+      "num_queries": 2048,
+      "max_val_scenes": 10,
+      "nproc_per_node": 8,
+      "cuda_visible_devices": "0,1,2,3,4,5,6,7",
+      "distributed_backend": "nccl",
+      "notes": "K2 interval=1 cross-attention candidate after fixed-30 MLP failure audit; direct Chamfer diagnostic, evaluate later with fixed-30 robust metrics/renders."
     }
   ]
 }
