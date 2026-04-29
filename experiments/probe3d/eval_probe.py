@@ -101,7 +101,7 @@ def main():
         print(f"Saved predictions to {path}")
         for scene_id, pred_points, gt_points in zip(scene_ids, pred_tensor, target_tensor):
             write_point_cloud_ply(os.path.join(args.output_dir, f"{scene_id}_pred.ply"), pred_points)
-            write_point_cloud_ply(os.path.join(args.output_dir, f"{scene_id}_gt.ply"), gt_points)
+            write_point_cloud_ply(os.path.join(args.output_dir, f"{scene_id}_pseudo_gt.ply"), gt_points)
         print(f"Saved PLY point clouds to {args.output_dir}")
 
 

@@ -301,12 +301,12 @@ def test_svd(args, show_gt=True):
 
                 # save gt
                 save_point_cloud_with_outlier_removal(
-                    filename=os.path.join(gt_save_dir, f"{name}_gt.ply"),
+                    filename=os.path.join(gt_save_dir, f"{name}_pseudo_gt.ply"),
                     xyz=pts3d_uniform_gt[0].numpy(), 
                     rgb=None, 
                     remove_outliers=False, 
                 )
-                print(f"GT saved to {os.path.join(gt_save_dir, f'{name}_gt.ply')}")
+                print(f"Pseudo GT saved to {os.path.join(gt_save_dir, f'{name}_pseudo_gt.ply')}")
 
                 # save img
                 img_filename = os.path.join(img_save_dir, f"{name}_rgb.jpg")

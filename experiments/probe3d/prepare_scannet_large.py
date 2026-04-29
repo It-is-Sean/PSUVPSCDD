@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import multiprocessing as mp
-import os
 import struct
 import subprocess
 import zlib
@@ -47,8 +46,8 @@ def export_sens_sampled(sens_path: Path, output_path: Path, frame_skip: int) -> 
         extrinsic_depth = read_matrix(handle)
         color_compression = COMPRESSION_TYPE_COLOR[struct.unpack("i", handle.read(4))[0]]
         depth_compression = COMPRESSION_TYPE_DEPTH[struct.unpack("i", handle.read(4))[0]]
-        color_width = struct.unpack("I", handle.read(4))[0]
-        color_height = struct.unpack("I", handle.read(4))[0]
+        handle.read(4)  # color_width
+        handle.read(4)  # color_height
         depth_width = struct.unpack("I", handle.read(4))[0]
         depth_height = struct.unpack("I", handle.read(4))[0]
         handle.read(4)  # depth_shift
@@ -111,15 +110,20 @@ def extract_one(task: tuple[str, Path, Path, int]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source_root", default="/data1/syh_data/Datasets/EmbodiedScan/scannet")
+    parser.add_argument("--source_root", default="/data1/jcd_data/scannerv2_paraell_w48")
     parser.add_argument("--raw_extract_root", default="/data1/jcd_data/scannet_raw_extract_large")
     parser.add_argument("--processed_root", default="/data1/jcd_data/scannet_processed_large")
     parser.add_argument("--train_scenes", type=int, default=300)
     parser.add_argument("--test_scenes", type=int, default=50)
-    parser.add_argument("--frame_skip", type=int, default=10, help="Keep every Nth frame directly while reading .sens.")
+    parser.add_argument("--frame_skip", type=int, default=20, help="Keep every Nth frame directly while reading .sens.")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--preprocess_script", default="datasets_preprocess/preprocess_scannet.py")
     parser.add_argument("--generate_script", default="datasets_preprocess/generate_set_scannet.py")
+    parser.add_argument("--build_complete_gt", action="store_true")
+    parser.add_argument("--complete_gt_script", default="experiments/probe3d/build_scannet_complete_gt.py")
+    parser.add_argument("--complete_points_per_scene", type=int, default=200000)
+    parser.add_argument("--complete_output_name", default="mesh_complete_reservoir_vh_clean.npz")
+    parser.add_argument("--overwrite_complete_gt", action="store_true")
     args = parser.parse_args()
 
     source_root = Path(args.source_root)
@@ -147,9 +151,30 @@ def main() -> None:
     processed_root.mkdir(parents=True, exist_ok=True)
     run(["python", args.preprocess_script, "--scannet_dir", str(raw_root), "--output_dir", str(processed_root)])
     run(["python", args.generate_script, "--root", str(processed_root), "--splits", "scans_train", "scans_test", "--max_interval", "150", "--num_workers", str(args.workers)])
+
+    if args.build_complete_gt:
+        complete_cmd = [
+            "python",
+            args.complete_gt_script,
+            "--source_root",
+            str(source_root),
+            "--processed_root",
+            str(processed_root),
+            "--points_per_scene",
+            str(args.complete_points_per_scene),
+            "--output_name",
+            args.complete_output_name,
+            "--workers",
+            str(args.workers),
+        ]
+        if args.overwrite_complete_gt:
+            complete_cmd.append("--overwrite")
+        run(complete_cmd)
+
     (processed_root / "PREPARED_BY_probe3d_prepare_scannet_large.txt").write_text(
         f"source_root={source_root}\nraw_extract_root={raw_root}\nprocessed_root={processed_root}\n"
-        f"train_scenes={args.train_scenes}\ntest_scenes={args.test_scenes}\nframe_skip={args.frame_skip}\nworkers={args.workers}\n",
+        f"train_scenes={args.train_scenes}\ntest_scenes={args.test_scenes}\nframe_skip={args.frame_skip}\nworkers={args.workers}\n"
+        f"build_complete_gt={args.build_complete_gt}\ncomplete_points_per_scene={args.complete_points_per_scene}\ncomplete_output_name={args.complete_output_name}\n",
         encoding="utf-8",
     )
     print(f"Prepared ScanNet at {processed_root}", flush=True)

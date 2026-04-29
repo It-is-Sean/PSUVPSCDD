@@ -1,56 +1,73 @@
-# Probe workspace overview
+# Probe Docs
 
-This repo is trying to answer one concrete question:
+## Current canonical status — 2026-04-29 afternoon
 
-> Can a shared complete-3D decoder reveal 3D structure in frozen representations that shallow direct readout misses?
+For the latest autonomous/research-loop state, read:
 
-## Current experimental status
+- `../../experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`
+- `../../experiments/probe3d/autoresearch_probe/heartbeat_log.md`
+- `../../researchclaw/config.arc.yaml`
 
-Right now the real progress is simpler than the full proposal scope:
+Key corrections:
 
-- on **SCREAM**, we have already trained **2-layer and 4-layer MLP adapters**
-- the result is **promising enough to support feasibility**, with the best run reaching roughly **CD ≈ 0.18**
-- switching to a **4-layer attention adapter** did **not** improve things and currently looks less convincing
-- the next real milestone is to move to a **larger dataset (ScanNet v2)** and test whether this proposal still works there
+- `scannet_max_interval=1` is now the intended setting because ScanNet preprocessing already uses `frame_skip=20`. Old `max_interval=30` K-view conclusions are invalid/confounded.
+- CD-only and two-sample oracle results are not claim-level evidence. Use fixed-sample robust metrics and visual audits.
+- The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
+- AutoResearchClaw is active as a proposal-aligned organizer, but its outputs are audited by a 15-minute supervisor for direction and code cleanliness.
 
-So the current story is:
 
-1. the proposal looks **feasible on a smaller dataset**
-2. MLP-style adapters are currently the stronger direction
-3. the next job is **scale validation**, not expanding scope
+This folder records the proposal-facing execution state for the current adapter / decoder experiments.
 
-## What matters most right now
+## Read this first
 
-If you only want the essential documents, read these in order:
+### 1. What is active now?
+The current active formal branch is the **ScanNet v2 mesh-first extension line**.
 
-1. `PROPOSAL.md` — the core idea
-2. `PROJECT.md` — current status / decisions / next step
-3. `experiments/probe3d/README.md` — the path where the real experiments currently live
+It is:
+- a NOVA3R-style extension / transfer probe
+- based on reliable mesh-first complete-GT supervision
+- launched through DDP / `torchrun`
 
-Everything else under `docs/probe/` should be treated as supporting notes, not the main project narrative.
+It is **not** a literal reproduction of official NOVA3R training on `3D-FRONT + ScanNet++V2`.
 
-## Repo reality check
+### 2. What about SCRREAM?
+The older local `eval_scrream` experiments are now treated as **invalid for formal claims**, because they used only the released eval subset rather than the official full-data setup.
 
-The repo currently has two layers:
+The SCRREAM branch remains important, but only after correct full data becomes available locally.
 
-- a **cleaner research scaffold**: `configs/probe/`, `scripts/probe/`, `nova3r/probe/`
-- a **more executable experiment path**: `experiments/probe3d/`
+## Core documents
 
-At the moment, the **actual experimental history is mostly in `experiments/probe3d/`**.
+- `scannet_mesh_first_plan.md`
+  - the current formal ScanNet v2 plan, assumptions, implementation status, and launch semantics
 
-## Current strategic interpretation
+- `experiment_history.md`
+  - the honest history, including corrections and invalidated branches
 
-The proposal is conceptually broad, but the practical first-paper path should stay narrow:
+- `experiment_plan.md`
+  - phased execution plan from the current state forward
 
-- focus on **image / geometry backbones first**
-- treat **video** as a later extension
-- prioritize a strong **feasibility story on ScanNet v2** over adding more model families too early
+- `todo.md`
+  - current actionable task list
 
-## Optional supporting notes
+## Current active probe baseline
 
-Use these only when needed:
+The current ScanNet branch has shifted from a long formal MLP run to a short autoresearch-style probe loop, because that isolated the failure mode faster.
 
-- `docs/probe/experiment_history.md` — consolidated run history read from logs/results
-- `docs/probe/nova3r_mapping.md` — mapping from proposal ideas to NOVA3R code
-- `docs/probe/experiment_plan.md` — phased implementation plan
-- `docs/probe/todo.md` — loose TODO list
+Current best numeric baseline:
+
+- target: `anchor_frustum`
+- adapter: `MLP-L4, hidden=1024`
+- objective: direct sampled rollout Chamfer (`loss_type=chamfer_sample`)
+- best validation CD: `0.08745259`
+- output dir: `experiments/probe3d/result/autoresearch_probe/p1_adapter_anchor_frustum_mlp_l4_chamfer_lr1e5_refine_step2500`
+
+Interpretation:
+
+- direct Chamfer fixed a large train/eval objective mismatch compared with `nova_flow`
+- the result is still not visually clean: prediction recall is reasonable, but precision / outlier control is poor
+- next experiments should track precision-aware loss and GT-vs-pred videos, not just lower symmetric CD
+### Paper-aligned NOVA3R reset
+
+After user review, the active plan is to align the ScanNet target/loss more closely with NOVA3R: complete / amodal points inside the selected input-view frustum, FPS-style target sampling through `src_complete_fps_*`, and native flow matching as the primary loss. The new phase-2 config is:
+
+- `experiments/probe3d/autoresearch_probe/configs/phase2_nova_aligned.json`

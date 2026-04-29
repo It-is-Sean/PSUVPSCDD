@@ -1,80 +1,146 @@
-<p align="center">
-  <img src="assets/nova3r_logo.png" alt="NOVA3R logo" width="224">
-</p>
+# PSUVPSC3DD / Probe Workspace
 
-<p align="center">
-  <a href="https://arxiv.org/abs/2603.04179"><img src="https://img.shields.io/badge/arXiv-2603.04179-b31b1b.svg" alt="arXiv"></a>
-  <a href="https://wrchen530.github.io/nova3r/"><img src="https://img.shields.io/badge/Project-Page-blue.svg" alt="Project Page"></a>
-  <a href="https://www.apache.org/licenses/LICENSE-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
-</p>
+## Current canonical status — 2026-04-29 afternoon
 
-# PSUVPSC3DD / NOVA3R integrated research repo
+The active branch is now supervised by AutoResearchClaw, but the proposal remains the source of truth. See:
 
-This repo is the merged working tree for two parallel attempts:
+- `PROPOSAL.md`
+- `experiments/probe3d/autoresearch_probe/CURRENT_STATE.md`
+- `experiments/probe3d/autoresearch_probe/heartbeat_log.md`
+- `researchclaw/config.arc.yaml`
 
-1. the original `PSUVPSC3DD_repo` branch centered on `experiments/probe3d/`
-2. the separate `probe` research fork that added proposal docs, configs, probe modules, and launch scaffolding
+Important corrections that override older sections below:
+
+1. **ScanNet view interval:** processed data already uses `frame_skip=20`; corrected experiments use `scannet_max_interval=1` (adjacent processed frames, roughly 20 raw frames). Older `max_interval=30` runs are interval-confounded.
+2. **Metric reliability:** single symmetric CD and two-sample oracle averages are diagnostic only. Current evaluation should use fixed samples, pred→GT precision, GT→pred recall, F-score thresholds, trimmed CD, and visual videos.
+3. **MLP baseline:** the best interval-corrected MLP checkpoint has poor precision/outlier behavior despite non-awful CD; it is a baseline/failure mode, not a strong proposal result.
+4. **Current next step:** expand robust evaluation to the fixed sample manifest and compare structured adapter / pseudo-GT candidates under the same protocol.
+
+
+This repository is currently a **research execution workspace** around a simple question:
+
+> can frozen visual backbones (currently VGGT-first) drive a NOVA3R-style decoder through a lightweight adapter, and learn useful complete 3D reconstruction behavior under reliable supervision?
+
+It contains:
+
+- the NOVA3R / DUST3R style reconstruction stack used here as the decoder/data backbone
+- the probe / adapter experiments under `experiments/probe3d/`
+- proposal-facing documentation under `docs/probe/`
 
 ## Current experimental status
 
-The current story is simpler than the full proposal scope:
+There are now **two active lines**, and they should be interpreted differently.
 
-- on **SCREAM**, we have already trained **2-layer and 4-layer MLP adapters**
-- the result is promising enough to support **initial feasibility**, with the best run reaching roughly **CD ≈ 0.18**
-- a **4-layer attention adapter** has also been tested, but the result is currently **not as good / not as convincing**
-- the next real milestone is to move to **ScanNet v2** and test whether the same idea still works on a larger dataset
+### 1. SCRREAM line
 
-So the repo should currently be read as a **feasibility-stage research workspace**, not a finished full-scope benchmark platform.
+A retrospective audit found that the earlier local `eval_scrream` package was only the released **evaluation subset** (~1.6 GB), not the official full training-scale dataset.
 
-## What to read first
+So:
 
-If you only want the essential project state, read:
+- the older SCRREAM quantitative results are **invalid as formal scientific evidence**
+- they are still useful as **pipeline/debugging history**
+- they should not be used as proposal feasibility claims
 
-1. `PROPOSAL.md` — core idea
-2. `PROJECT.md` — actual current status and next step
-3. `experiments/probe3d/README.md` — the path where the real experiments currently live
+The correct full-data SCRREAM rerun remains a separate pending branch once the official full dataset is available locally.
 
-Supporting notes under `docs/probe/` are secondary.
+### 2. ScanNet v2 line
 
-## Repo reality
+The current active scale-up path is a **ScanNet v2 mesh-first extension line**.
 
-There are two layers in this repo:
+Important interpretation note:
 
-- a **cleaner scaffold**: `configs/probe/`, `scripts/probe/`, `nova3r/probe/`
-- a **more executable experimental path**: `experiments/probe3d/`
+- this is a **NOVA3R-style extension / transfer probe** on ScanNet v2
+- it is **not** a literal reproduction of the official NOVA3R scene-training recipe, which is described around `3D-FRONT + ScanNet++V2`
 
-Right now the real run history is mostly under `experiments/probe3d/`.
+Still, the training structure is intentionally aligned with the proposal direction:
 
-## Key layout
+- frozen visual backbone
+- lightweight adapter
+- NOVA3R-style decoder / flow-matching training path
+- reliable **complete-GT style** supervision
 
-- `PROJECT.md` — project memory, decisions, current status
-- `PROPOSAL.md` — proposal copy for the shared complete-3D decoding direction
-- `experiments/probe3d/` — current main experiment path
-- `docs/probe/` — supporting notes and planning docs
-- `third_party/vggt/` — vendored VGGT code
-- `dust3r/datasets/` — vendored DUSt3R dataset loaders
-- `datasets_preprocess/` — vendored preprocessing helpers including ScanNet scripts
+## Active ScanNet v2 mesh-first plan
 
-## Quick start
+The current formal ScanNet training path uses:
 
-```bash
-cd /home/jcd/PSUVPSC3DD_repo
+- geometry source: `vh_clean.ply`
+- frame sampling: `frame_skip=20`
+- GT definition: `mesh surface ∩ sparse-input-view union frustum`
+- no extra visible/occluded auxiliary labels for now
+- scene-level reservoir: `500k` mesh-sampled points per scene
+- true **4-view input**
+- DDP / `torchrun` training launchers
 
-# create / update the shared conda env
-make probe-env
+Formal plan details live in:
 
-# verify critical imports and CUDA
-make probe-env-verify
-```
+- `docs/probe/scannet_mesh_first_plan.md`
+
+## What is already implemented
+
+### Data / supervision
+- full ScanNet v2 preprocess completed to:
+  - `/data1/jcd_data/scannet_processed_large_f20_vhclean500k`
+- formal split created at:
+  - `/data1/jcd_data/scannet_processed_large_f20_vhclean500k_split_seed17`
+- split scene counts:
+  - `train=1362`
+  - `val=151`
+  - `test=100`
+
+### Model / training plumbing
+- ScanNet now truly feeds **4 input views**
+- `pts3d_complete` is available from scene-level mesh reservoirs
+- MLP / CA / SA training scripts were converted to **DDP / torchrun**
+- launchers were updated accordingly
+
+### Validation status
+- visible-depth ScanNet smoke passed earlier
+- complete-GT ScanNet smoke passed
+- full-root `torchrun --nproc_per_node=1` MLP DDP preflight also passed
+
+## Current active result — autoresearch-style ScanNet probe
+
+The long formal 50-epoch MLP run is no longer the most informative immediate path. A short autoresearch-style harness under `experiments/probe3d/autoresearch_probe/` isolated the main failure mode more quickly.
+
+Current best numeric run:
+
+- target: `anchor_frustum`
+- adapter: `MLP-L4, hidden=1024`
+- objective: direct sampled rollout Chamfer, `loss_type=chamfer_sample`
+- schedule: `lr=5e-5` to step 2000, then `lr=1e-5` refinement to step 2500
+- best validation CD: `0.08745259`
+- output dir: `experiments/probe3d/result/autoresearch_probe/p1_adapter_anchor_frustum_mlp_l4_chamfer_lr1e5_refine_step2500`
+
+Important interpretation:
+
+- switching from `nova_flow` to direct rollout Chamfer is what moved CD down from roughly `0.30–0.35` to `<0.1`
+- this mostly fixes the training/evaluation objective mismatch
+- the visual result is still not good enough: the prediction covers the GT but contains many loose / thick-shell / outlier points
+- the problem has shifted from **recall / target reachability** to **precision / sharpness**
+
+
+### Paper-aligned NOVA3R reset
+
+After user review, the active plan is to align the ScanNet target/loss more closely with NOVA3R: complete / amodal points inside the selected input-view frustum, FPS-style target sampling through `src_complete_fps_*`, and native flow matching as the primary loss. The new phase-2 config is:
+
+- `experiments/probe3d/autoresearch_probe/configs/phase2_nova_aligned.json`
 
 ## Research direction right now
 
-The practical next step is:
+The practical near-term plan is:
 
-- keep the first paper path focused on **image / geometry backbones**
-- treat **video** as a later extension
-- prove feasibility more convincingly on **ScanNet v2**
+1. keep the SCRREAM correction in mind and do not reuse the old invalid claims
+2. treat the ScanNet v2 mesh-first branch as a transfer-probe line, not official NOVA3R reproduction
+3. keep `anchor_frustum + direct Chamfer` as the current numeric baseline
+4. replace symmetric Chamfer-only training with a precision-aware objective, e.g. weighted `pred→GT` plus `GT→pred`, trimmed Chamfer, or outlier penalties
+5. use visual point-cloud videos alongside CD before claiming progress
+6. once correct full SCRREAM data arrives, rerun that branch cleanly as a separate line
 
-## License
+## Documentation map
 
-This project is licensed under the Apache License 2.0. Third-party code keeps its original license terms, including vendored code under `third_party/vggt/`.
+- `PROJECT.md` — current project-level status and next steps
+- `docs/probe/README.md` — probe-doc entry point
+- `docs/probe/scannet_mesh_first_plan.md` — current ScanNet formal plan
+- `docs/probe/experiment_history.md` — what really happened, including corrections
+- `docs/probe/experiment_plan.md` — phased execution plan from here
+- `docs/probe/todo.md` — current actionable task list

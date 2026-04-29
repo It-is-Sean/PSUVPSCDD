@@ -91,14 +91,14 @@ def main():
             scene_ids = scene_ids_from_batch(batch, saved)
             scene_id = scene_ids[0]
             write_point_cloud_ply(output_dir / f"{scene_id}_pred.ply", pred[0])
-            write_point_cloud_ply(output_dir / f"{scene_id}_gt.ply", target[0])
+            write_point_cloud_ply(output_dir / f"{scene_id}_pseudo_gt.ply", target[0])
             save_input_images(images, output_dir, scene_id)
             metrics.append(
                 {
                     "scene_id": scene_id,
                     "chamfer_l2": float(loss.item()),
                     "pred_ply": str(output_dir / f"{scene_id}_pred.ply"),
-                    "gt_ply": str(output_dir / f"{scene_id}_gt.ply"),
+                    "gt_ply": str(output_dir / f"{scene_id}_pseudo_gt.ply"),
                     "selected_vggt_feature_index": selected_idx,
                     "selection_reason": reason,
                 }

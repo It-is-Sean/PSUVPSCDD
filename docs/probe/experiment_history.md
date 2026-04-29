@@ -1,321 +1,302 @@
 # Experiment history summary
 
-This document consolidates the **actual recorded experiment history** currently present in the repo.
+## 2026-04-29 correction block — interval, metric, and ResearchClaw
 
-## 0. High-level judgment
+A major audit corrected the interpretation of the ScanNet runs:
 
-The current history is real but unevenly documented.
+- The processed ScanNet data already uses `frame_skip=20`. The inherited dataloader `max_interval=30` therefore sampled views up to roughly 600 raw frames apart. All old K-view conclusions from those runs are interval-confounded.
+- Corrected local-overlap experiments use `scannet_max_interval=1`, equivalent to adjacent processed frames / roughly 20 raw frames.
+- GT-only visual audit showed the three ScanNet target modes (`anchor_frustum`, `covered_by_ge2`, `nova_input_frustum`) are not drastically different by eye.
+- Oracle CD rankings were dominated by tiny sample counts, stochastic decoder sampling, flow-vs-CD mismatch, and outlier samples; they are no longer treated as reliable target-mode rankings.
+- Robust evaluation of the interval-corrected MLP baseline shows moderate recall but poor precision/outlier control, matching the qualitative failure.
 
-- The **real executable history** is concentrated in `experiments/probe3d/`.
-- The cleaner `scripts/probe/` + `configs/probe/` workspace is still mostly a scaffold and has **not yet accumulated real run history**.
-- The strongest currently documented signal is **VGGT -> NOVA decoder via the flow adapter branch**.
-- The cross-attention branch has been tried multiple times, but the current logged evidence does **not** make it look like the leading direction yet.
-- The old direct probe path has one reasonably documented full run, but the earlier tiny/medium stages are only partially recorded.
+AutoResearchClaw was installed and configured as a research-loop organizer. A local proxy bridges ResearchClaw to the OpenClaw-configured model provider, and a separate 15-minute OpenClaw supervisor audits ResearchClaw outputs for proposal alignment and code cleanliness.
 
-So the repo history currently tells a coherent story:
 
-1. build SCRREAM adapter data
-2. run a direct probe baseline from precomputed NOVA features
-3. switch to a VGGT -> NOVA decoding path
-4. compare adapter variants
-5. start probing ScanNet-scale preprocessing, but that branch is currently blocked by permissions
+This document records what actually happened, including corrections.
 
----
+## 1. Major correction — old SCRREAM results are invalid for claims
 
-## 1. Where the real history lives
+A later audit found that the local `eval_scrream` package used in the earlier SCRREAM line was only the released evaluation subset, not the official full-data setup.
 
-### Main recorded artifacts
-- `experiments/probe3d/result/`
-- `experiments/probe3d/runs/`
-- `experiments/probe3d/adapter_data_test/`
-- `experiments/probe3d/cache/`
-- `experiments/probe3d/result/scannet_logs/`
+Therefore:
 
-### Important absence
-There are currently **no real experiment records** under the cleaner `artifacts/` workspace. That means the structured probe framework is documented, but the live experiment trail still belongs to `probe3d`.
+- the older SCRREAM quantitative results are **invalid as formal evidence**
+- they remain useful as **engineering/debugging history** only
+- they must not be used as proposal feasibility claims
 
----
+## 2. What remains valid from the earlier history
 
-## 2. Chronological reconstruction
+Even after that correction, the repo still accumulated real engineering progress:
 
-## Phase A — SCRREAM adapter-data construction and small dry runs
+- adapter branches were implemented and trained
+- NOVA3R-style decoder integration was established
+- caching / logging / export paths were exercised
+- debugging knowledge compounded across multiple runs
 
-### A1. Initial manifest build
-- Artifact: `experiments/probe3d/adapter_data_test/scrream_adapter_manifest.json`
-- Generated at: `2026-04-26T13:05:27+00:00`
-- Sample counts: `train=388, val=43, test=1` (total 432)
-- Config clues:
-  - `group_size=4`
-  - `sample_stride=1`
-  - `pad_short_scenes=true`
-  - `pseudo_gt_views=2`
+So the history is not wasted — it just must be interpreted honestly.
 
-### Judgment
-This looks like the **first successful data-preparation pass**, but the split is clearly awkward (`test=1`). Good enough for bringing the pipeline up, not good enough as a final experimental protocol.
+## 3. New active branch — ScanNet v2 mesh-first extension
 
-### A2. Tiny prepared dataset
-- Artifact: `experiments/probe3d/adapter_data_test/scrream_adapter_tiny.pt`
-- Modified: `2026-04-26 22:11`
-- Size: ~8.9 MB
+After the SCRREAM correction, a new formal branch became the active scale-up path.
 
-### A3. Tiny direct-probe checkpoint
-- Artifact: `experiments/probe3d/runs/adapter_tiny_epoch10.pt`
-- Modified: `2026-04-26 22:11`
+### Interpretation
+This branch is:
+- a **NOVA3R-style extension / transfer probe** on ScanNet v2
+- not a literal reproduction of official NOVA3R scene training on `3D-FRONT + ScanNet++V2`
 
-### Judgment
-This was almost certainly a **bring-up / smoke-test stage**. Useful historically, but there is not enough metadata to treat it as a serious comparable run.
+### Formal data decisions
+- mesh source: `vh_clean.ply`
+- frame sampling: `frame_skip=20`
+- GT: `mesh surface ∩ sparse-input-view union frustum`
+- no extra visible/occluded auxiliary labels
+- reservoir density: `500k / scene`
 
-### A4. Medium selected subset
-- Artifact: `experiments/probe3d/adapter_data_test/scrream_adapter_medium_seed17_selection.json`
-- Modified: `2026-04-26 22:21`
-- Source manifest: `/home/wdh/PSUVPSC3DD/experiments/probe3d/adapter_data_seed17/scrream_adapter_manifest_seed17.json`
-- Limits:
-  - `train=128`
-  - `val=32`
-  - `test=32`
-- Selected samples: 192 total
+### Formal processed dataset
+- processed root:
+  - `/data1/jcd_data/scannet_processed_large_f20_vhclean500k`
+- formal split root:
+  - `/data1/jcd_data/scannet_processed_large_f20_vhclean500k_split_seed17`
+- scene counts:
+  - `train=1362`
+  - `val=151`
+  - `test=100`
 
-### A5. Medium prepared dataset + checkpoint
-- Artifact: `experiments/probe3d/adapter_data_test/scrream_adapter_medium_seed17.pt`
-- Modified: `2026-04-26 22:21`
-- Size: ~82 MB
+### Key implementation milestones
+- true 4-view input wiring for ScanNet batches
+- `pts3d_complete` dataset path from scene-level mesh reservoirs
+- complete-GT builder script added
+- DDP / `torchrun` conversion for MLP / CA / SA
 
-- Artifact: `experiments/probe3d/runs/adapter_medium_seed17_epoch15.pt`
-- Modified: `2026-04-26 22:22`
+## 4. Smoke / preflight milestones
 
-### Judgment
-This is a sensible intermediate step: move from tiny bring-up to a **bounded balanced subset** before committing to full-data training. But again, the bookkeeping is incomplete: the checkpoint exists, but there is no matching explicit metrics/log bundle beside it.
+### Complete-GT ScanNet smoke
+- output dir:
+  - `experiments/probe3d/result/scannet_mlp_complete_smoke_seed17`
+- SwanLab run id:
+  - `30iyh29o1orq7mnm097u4`
 
----
+### Full-root MLP DDP preflight
+- output dir:
+  - `experiments/probe3d/result/scannet_mlp_ddp_fullroot_preflight_seed17`
+- SwanLab run id:
+  - `f7nivqbjlilypp5o9u4sz`
 
-## 3. Phase B — Full direct probe baseline on prepared SCRREAM data
+These runs matter because they show the current formal branch is not just a paper plan:
 
-### B1. Full prepared dataset
-- Artifact: `experiments/probe3d/result/scrream_adapter_manifest_seed17_full.json`
-- Generated at: `2026-04-26T14:26:29+00:00`
-- Prepared dataset path: `experiments/probe3d/result/scrream_adapter_full_seed17.pt`
-- Sample counts: `train=241, val=55, test=136` (total 432)
-- Feature shape per sample: `[768, 128]`
-- Target shape per sample: `[4096, 3]`
-- Dataset file size: ~191 MB
+- full preprocess exists
+- full split exists
+- complete GT exists
+- DDP launch path exists
+- the full-root training path actually starts and runs
 
-### Judgment
-This is the first dataset version that looks like a **real experimental base** instead of just a pipeline test. The split is much more usable than the original manifest.
+## 5. Superseded formal baseline run
 
-### B2. Full direct-probe training run
-- Checkpoint: `experiments/probe3d/result/adapter_full_seed17_epoch30.pt`
-- Modified: `2026-04-26 22:38`
-- Train log: `experiments/probe3d/result/adapter_full_seed17_epoch30_train.log`
-- Test log: `experiments/probe3d/result/adapter_full_seed17_epoch30_test.log`
-- Summary: `experiments/probe3d/result/adapter_full_seed17_epoch30_summary.txt`
+The earlier formal run target was the **ScanNet MLP baseline**. This remains part of the history, but the active direction was later superseded by the shorter autoresearch-style probe in Section 6.
 
-### Recorded metrics
-- Final test Chamfer Distance: `0.865267`
-- Best observed validation loss: `0.213123` at epoch `29/30`
-- Training loss fell from `3.707373` at epoch 1 to roughly the `0.175~0.18` range later
+### Purpose
+This is not meant as the final headline method.
+Its purpose is to establish whether:
 
-### B3. Qualitative outputs
-- Directory: `experiments/probe3d/result/full_seed17_test_ply/`
-- Stored:
-  - `predictions.pt`
-  - `136` GT PLY files
-  - `136` predicted PLY files
-  - `4` compare PNGs
-
-### Judgment
-This is the **best-documented direct baseline** in the repo right now. It is not glamorous, but it is real: dataset -> train log -> test metric -> qualitative exports. If we ever need a historical baseline anchor, this is the one to cite first.
-
----
-
-## 4. Phase C — VGGT -> NOVA decoding experiments
-
-All runs in this phase share the same overall pattern:
 - frozen VGGT features
-- selected intermediate feature index `22` (23rd block in human counting)
-- cached real-image features under `experiments/probe3d/cache/vggt23_realimg_seed17_l4/`
-- NOVA Stage-1 decoder supervision via `nova_flow` loss
+- a lightweight MLP adapter
+- and a NOVA3R-style decoder
 
-### Shared cache footprint
-- Cache directory: `experiments/probe3d/cache/vggt23_realimg_seed17_l4/`
-- Cached feature files: `257`
-- Total size: ~`5.52 GB`
+can learn stable complete 3D behavior under reliable mesh-first supervision at scale.
 
-This means the project has already paid the cost of a meaningful amount of VGGT feature extraction, and the later runs are not just toy stubs.
+### Formal schedule
+- 8 GPUs
+- batch size `1 / rank`
+- 50 epochs
+- `steps_per_epoch = 13158`
+- `max_steps = 657900`
+- validation/checkpoint every 5 epochs
 
-### C1. Flow adapter branch — strongest current result
-- Run: `vggt23_nova_adapter_flow_l4_realimg_cached_lr5e-5_seed17`
-- Modified: `2026-04-27 01:50`
-- Key config:
-  - adapter hidden dim: `1024`
-  - adapter layers: `4`
-  - adapter params: `4,334,720`
-  - loss: `nova_flow`
-  - lr: `5e-5`
-  - batch size: `8`
-  - max steps: `3000`
-  - num queries: `2048`
-- Final metrics:
-  - `first_loss = 1.6231`
-  - `final_loss = 0.8839`
-  - `best_loss = 0.6908`
-- Validation history:
-  - best logged validation Chamfer L2 = `0.1631` at step `2000`
-  - final logged validation Chamfer L2 = `0.1874` at step `3000`
-- Extra outputs:
-  - checkpoints every 500 steps
-  - PLY snapshots during training
-  - separate nohup log
+### Formal output dir
+- `experiments/probe3d/result/scannet_mlp_adapter_l4_lr5e-5_seed17_epoch50_formal`
 
-### Judgment
-This is currently the **most promising branch** in the recorded history.
+## 6. Autoresearch-style ScanNet probe update — objective mismatch isolated
 
-Not because it is perfect, but because:
-- it ran to completion
-- it has repeated checkpoints
-- it has a plausible downward training curve
-- its validation metric is much better than the logged attention-branch runs
+A short harness was added under:
 
-If I had to pick one historical run to continue from, it would be this one.
+- `experiments/probe3d/autoresearch_probe/`
 
-### C2. Cross-attention debug smoke test
-- Run: `vggt23_nova_attention_l4_scrream_debug_seed17`
-- Modified: `2026-04-27 02:07`
-- Key config:
-  - adapter type: `cross_attention`
-  - hidden dim: `512`
-  - layers: `4`
-  - params: `9,924,224`
-  - batch size: `1`
-  - max steps: `1`
-  - `debug_one_batch = true`
-- Metrics:
-  - `first_loss = final_loss = best_loss = 1.7893`
-  - validation Chamfer L2 = `52.3702`
+The purpose was to stop relying on a long formal run and instead test target modes / objectives quickly with immutable logging in `results.tsv`.
 
-### Judgment
-This is not a meaningful scientific result. It is a **plumbing check**: the attention adapter can run one step and save outputs.
+### Target-mode findings
 
-### C3. Cross-attention full-size attempt (4 layers, h=512)
-- Run: `vggt23_nova_attention_l4_scrream_cached_lr2e-5_seed17`
-- Modified: `2026-04-27 02:14`
-- Key config:
-  - adapter type: `cross_attention`
-  - hidden dim: `512`
-  - layers: `4`
-  - params: `9,924,224`
-  - lr: `2e-5`
-  - batch size: `8`
-  - max steps planned: `3000`
-- What actually happened:
-  - only checkpointed up to `step_000500.pth`
-  - training log continues only to around step `883`
-  - no `final_metrics.json`
-- Best logged training-side number: `best=0.83555222`
-- Best/only validation record in log bundle: `val_chamfer_l2 = 0.6273` at step `500`
+Oracle token optimization showed that target support matters:
 
-### Judgment
-This run is **incomplete / interrupted**. It still tells us something: the larger attention adapter did not obviously beat the flow branch early, and the run stopped before becoming a trustworthy candidate.
+- `anchor_frustum`: oracle CD `0.23668508`
+- `anchor_frustum_margin1.5`: oracle CD `0.81146899` — too broad / out of generator support
+- `covered_by_ge2`: oracle CD `0.18723274`
+- `covered_by_ge2_anchorfb`: oracle CD `0.20196436`
 
-### C4. Smaller cross-attention run (2 layers, h=256)
-- Run: `vggt23_nova_attention_l2_h256_scrream_cached_lr1e-5_seed17`
-- Modified: `2026-04-27 02:38`
-- Key config:
-  - adapter type: `cross_attention`
-  - hidden dim: `256`
-  - layers: `2`
-  - heads: `4`
-  - params: `1,809,792`
-  - lr: `1e-5`
-  - batch size: `8`
-  - max steps: `3000`
-- Final metrics:
-  - `first_loss = 2.2715`
-  - `final_loss = 0.9747`
-  - `best_loss = 0.8164`
-- Validation:
-  - final / best logged validation Chamfer L2 = `1.2136` at step `3000`
+`anchor_frustum` became the stable adapter target because it avoided empty-support / fallback contamination and stayed within the anchor-camera generator domain.
 
-### Judgment
-This is a completed and well-logged run, but the result is **clearly weaker than the flow adapter branch**. Right now it argues against making cross-attention the default path unless there is a strong conceptual reason or later evidence reverses the story.
+### Objective findings
 
----
+With `anchor_frustum`, the old `nova_flow` objective underperformed:
 
-## 5. Phase D — ScanNet-scale preprocessing attempt
+- `MLP-L4 + nova_flow`, step1000: `0.34512938`
+- `MLP-L2-h512 + nova_flow`, step1000: `0.30276422`
 
-### D1. ScanNet extraction attempt
-- Log: `experiments/probe3d/result/scannet_logs/prepare_scannet_large_300_50.log`
-- Modified: `2026-04-27 02:01`
-- Intent:
-  - select `300` training scenes
-  - select `50` test scenes
-  - sample frames with `frame_skip=10`
-- Failure:
-  - `PermissionError: [Errno 13] Permission denied`
-  - blocked on reading `.sens` files, e.g. `scene0000_01.sens`
+Switching to direct sampled rollout Chamfer was the decisive change:
 
-### Judgment
-This is **infrastructure history, not experiment history**. It matters because it shows the project was already trying to expand beyond SCRREAM, but right now this branch is blocked by file-permission issues rather than model behavior.
+- `MLP-L4 + chamfer_sample`, step1000: `0.11552816`
+- continued to step2000 at `lr=5e-5`: `0.09181590`
+- continuing at `lr=5e-5` became unstable / overfit by step2500: `0.35143724`, so it was stopped
+- resuming from step2000 with `lr=1e-5` refined to step2500: `0.08745259` — current best
+- continuing the same low-LR branch to step3000 slightly worsened: `0.09132496`
 
----
+### Visual / diagnostic finding
 
-## 6. What the history currently supports
+The numeric best is not yet visually satisfying. A GT-vs-pred video showed that the model covers much of the target support but produces a thick / loose / outlier-heavy point cloud.
 
-## Strongly supported
-- The repo has already moved past pure planning into real probe experimentation.
-- A full SCRREAM-based direct baseline exists.
-- A VGGT -> NOVA decoding path exists and has been trained seriously enough to compare variants.
-- The flow adapter branch is the best currently documented direction.
+Nearest-neighbor diagnostic on the visualized sample:
 
-## Weakly supported / not yet convincing
-- Cross-attention as the main adapter family.
-- Any claim about video backbones.
-- Any claim about large-scale ScanNet experiments.
-- Any claim that the structured `scripts/probe/` workspace is already the place where real experiments are being logged.
+- `GT→Pred` mean distance: `0.0582`
+- `Pred→GT` mean distance: `0.1777`
 
----
+This means recall is acceptable but precision is poor. The current bottleneck is no longer simply “make CD go down”; it is prediction sharpness / outlier suppression.
 
-## 7. Reproducibility debt found while reading the history
+### Resulting conclusion
 
-Several history files still contain stale absolute paths from earlier environments:
+The key learning is: direct rollout Chamfer fixes a large train/eval objective mismatch, but symmetric Chamfer alone can be gamed by noisy coverage. The next method change should be precision-aware: overweight `pred→GT`, use trimmed Chamfer, or add an outlier penalty.
 
-- `/home/wdh/nova3r/...`
-- `/home/wdh/PSUVPSC3DD/...`
-- `/home/jcd/.openclaw/workspace/projects/probe/...`
+## 7. Bottom line
 
-This shows up in:
-- dataset manifests
-- some run configs
-- old checkpoint references
+The cleanest honest reading of the repo today is:
 
-### Why this matters
-The experiments themselves are still useful, but the history is **not yet fully self-contained as a paper artifact trail**. Anyone replaying the logs later may not know which paths are semantically important versus just historical machine residue.
+- old SCRREAM eval-subset claims are invalid
+- the engineering stack survived that correction
+- the ScanNet v2 mesh-first line is now the main trustworthy scale-up path
+- the current best numeric baseline is `anchor_frustum + MLP-L4 + direct Chamfer`, CD `0.08745259`
+- that numeric result is not visually clean enough: recall is acceptable, precision / outlier control is poor
+- the next milestone is a precision-aware loss and visual improvement, before CA / SA comparison
+## 8. Paper-aligned GT / loss correction after user review
 
----
+Jiacheng clarified that NOVA3R's completion target is not a full-room point cloud. It is a complete / amodal point cloud **within the selected input-view frustum**: for example, if a table is in view, the model should recover surfaces such as the underside of the table within that frustum, not hallucinate the entire room.
 
-## 8. Suggested cleanup priority
+This changes the interpretation of the previous `anchor_frustum` result. It was useful because it partially aligned with NOVA3R's target construction, but for K-view training the paper-aligned target should be the union of the selected input frusta, not just the first view. Direct Chamfer remains a diagnostic, while the main representation-probe objective should return to NOVA-native flow matching.
 
-If the goal is to make the history truly paper-usable, the next documentation step should be:
+Implementation started:
 
-1. keep this summary file as the canonical history overview
-2. retro-tag each serious run as one of:
-   - data-prep
-   - direct-baseline
-   - VGGT->NOVA flow adapter
-   - VGGT->NOVA attention adapter
-   - infra attempt / failed preprocessing
-3. normalize stale absolute paths in copied summaries / manifests where possible
-4. start writing future serious runs into a single structured run-card or experiment-index file
+- added explicit `nova_input_frustum` alias for union-of-selected-input-frusta complete targets
+- added `nova_anchor_frustum` alias for K=1 / first-view debug targets
+- exposed `scannet_complete_points` through loader, oracle, adapter, and autoresearch harness
+- added `query_source` passthrough in the harness so trials can use `src_complete_fps_4096`
+- created `experiments/probe3d/autoresearch_probe/configs/phase2_nova_aligned.json` with K=1/K=2 oracle and MLP-L4 native-flow adapter trials
 
----
+Next result to record: K=1/K=2 oracle support for `nova_input_frustum + src_complete_fps_4096`.
 
-## 9. Bottom line
 
-The current experiment history is not random clutter. It already tells a fairly sharp story:
+## 9. Phase-2 paper-aligned frustum oracle controls
 
-- **data-prep matured from tiny -> medium -> full**
-- **a direct baseline was trained and evaluated**
-- **a VGGT -> NOVA probe line was established**
-- **the flow adapter currently beats the attention variants in the recorded logs**
-- **the project has not yet earned a broader cross-backbone or video-level claim**
+After Jiacheng's clarification that NOVA3R predicts complete/amodal geometry constrained to input-view frusta rather than whole-room completion, I added explicit target modes and controls for more paper-literal target construction.
 
-That is probably the most honest reading of the history right now.
+Implementation notes:
+
+- `nova_input_frustum`: union of the selected input-view frusta, collapsed into the existing `pts3d_complete` target path.
+- `nova_per_view_frustum`: each input view contributes its own complete frustum crop, matching NOVA's `get_complete_pts3d()` per-view stacking convention more literally.
+- `nova_per_view_frustum_anchor_zpos`: same as per-view but clipped to positive anchor-camera z for ScanNet stability.
+- Exposed `scannet_complete_points` and `query_source` through the autoresearch harness.
+- Fixed two runtime issues discovered by controls: ScanNet `num_views=1` sequence sampling crashed in `get_seq_from_start_id`, and local PyTorch3D FPS requires an explicit `max_K` argument.
+
+Oracle results on the first two val samples were not promising:
+
+- `nova_input_frustum`, K1, `src_complete_fps_4096`: mean CD `0.4766`
+- `nova_input_frustum`, K2, `src_complete_fps_4096`: mean CD `1.3288`
+- `nova_input_frustum`, K4, `src_complete`: mean CD `0.7692`
+- `nova_input_frustum`, K4, `src_complete_fps_4096`: mean CD `1.3315`
+- `nova_per_view_frustum`, K4, `src_complete_fps_4096`: mean CD `1.6023`
+- `nova_per_view_frustum_anchor_zpos`, K4, `src_complete_fps_4096`: mean CD `0.9611`
+
+Key interpretation: K1 controls are not directly comparable to the real 4-view probe because the NOVA decoder receives `num_views=1` conditioning, which appears out-of-domain. For the actual 4-view probe, the paper-literal union/per-view input-frustum targets fail oracle gating. The earlier 4-view `anchor_frustum` / `covered_by_ge2` targets remain more credible generator-domain targets (`anchor_frustum` oracle around `0.2367`, `covered_by_ge2` around `0.1872`). Therefore the next adapter experiments should not use `nova_input_frustum` yet; they should use oracle-supported 4-view target definitions and focus on native-flow or hybrid objective design.
+
+## 10. Phase-4 feasibility pivot — K=2, MLP-L4, loss and GT sweep
+
+After additional user review, the current priority was changed from exact NOVA3R GT reproduction to a cleaner **feasibility proof**: show that frozen VGGT representations can be adapted into a latent/token form that the NOVA generator can consume and roll out into meaningful 3D.
+
+### Why the pivot happened
+
+Two observations motivated the new sweep:
+
+- The exact official NOVA3R GT construction is not fully observable from the released code/data path, so exact alignment should not block feasibility validation.
+- Jiacheng pointed out that increasing the number of input views can itself reduce / empty the valid complete-target support under some target packagings. Quick loader stats supported this concern: K=4 often introduced empty view slots or lower average valid target counts than K=2.
+
+### Completed quick controls before the overnight run
+
+- `p4_oracle_norm_nova_per_view_ldi4_k2_fps4096_s2_step600`: CD `0.78956747`
+- `p4_oracle_norm_anchor_frustum_k2_fps2048_s2_step600`: CD `0.10993152`
+
+Interpretation:
+
+- K=2 did **not** rescue the current LDI-style per-view target.
+- K=2 made the stable `anchor_frustum` feasibility target much more generator-reachable than the previous K=4 setting.
+
+### Active overnight loss ablation
+
+The current active run is the K=2 / MLP-L4-H1024 / `anchor_frustum` loss ablation:
+
+- `p4_k2_anchor_mlp_l4_flow_step1000` — native `nova_flow`
+- `p4_k2_anchor_mlp_l4_hybrid005_step1000` — `nova_flow + 0.05 * rollout_chamfer`
+- `p4_k2_anchor_mlp_l4_chamfer_step1000` — direct rollout Chamfer diagnostic
+
+Driver log:
+
+- `experiments/probe3d/result/autoresearch_probe/p4_k2_mlp_l4_loss_ablation_driver.out`
+
+As of the documentation update, the first run was active around step ~676.
+
+### Queued overnight GT-construction sweep
+
+A continuation script waits for the active MLP-L4 loss ablation to finish and then launches additional K=2 controls.
+
+Script / driver:
+
+- script: `experiments/probe3d/result/autoresearch_probe/p4_overnight_after_l4_ablation.sh`
+- driver log: `experiments/probe3d/result/autoresearch_probe/p4_overnight_after_l4_ablation_driver.out`
+- launcher PID at creation time: `339478`
+
+Queued oracle GT candidates:
+
+- `nova_input_frustum`
+- `covered_by_ge2`
+- `anchor_frustum_margin`, margin `1.5`
+- `nova_per_view_frustum_anchor_zpos`
+- `nova_per_view_ldi2`
+- `nova_per_view_ldi4`
+- `nova_per_view_ldi8`
+
+Queued adapter target/loss candidates:
+
+- targets: `covered_by_ge2`, `nova_input_frustum`, `anchor_frustum_margin1.5`
+- losses: native `nova_flow` and `flow_chamfer_hybrid` with `chamfer_weight=0.05`
+- adapter: `MLP-L4-H1024`
+- views: K=2
+- queries: `2048`
+
+### How to interpret tomorrow's results
+
+The primary feasibility claim should come from the best K=2 result that satisfies both conditions:
+
+1. The target has a plausible oracle ceiling.
+2. The VGGT adapter approaches that ceiling enough to show the representation can be consumed by the NOVA generator.
+
+Direct Chamfer remains a metric/visual diagnostic. Native flow and the small hybrid loss are more relevant to a generator-native representation claim.
+
+### Step-count adjustment
+
+Jiacheng requested that the training runs use slightly more steps. The short K=2 MLP-L4 native-flow run had already completed at step1000 with CD `0.91071419`, which is weak and should be treated as a partial / short-run diagnostic.
+
+The overnight plan was updated to longer adapter schedules:
+
+- resume `p4_k2_anchor_mlp_l4_flow_step1000` to `p4_k2_anchor_mlp_l4_flow_resume_step2000`
+- run `p4_k2_anchor_mlp_l4_hybrid005_step2000`
+- run `p4_k2_anchor_mlp_l4_chamfer_step2000`
+- run the queued adapter GT/loss sweep at `2000` steps per trial instead of `1000`
+
+New long-suite driver:
+
+- `experiments/probe3d/result/autoresearch_probe/p4_overnight_k2_mlp_l4_long_driver.out`

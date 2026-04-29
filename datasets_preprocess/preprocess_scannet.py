@@ -40,8 +40,17 @@ def process_scene(args):
     if not np.isfinite(depth_intrinsic).all() or not np.isfinite(color_intrinsic).all():
         return
     os.makedirs(osp.join(outdir, split, scene), exist_ok=True)
-    frame_num = len(os.listdir(rgb_dir))
-    assert frame_num == len(os.listdir(depth_dir)) == len(os.listdir(pose_dir))
+    rgb_files = sorted(
+        [f for f in os.listdir(rgb_dir) if f.endswith('.jpg')],
+        key=lambda x: int(osp.splitext(x)[0]),
+    )
+    depth_files = {osp.splitext(f)[0] for f in os.listdir(depth_dir) if f.endswith('.png')}
+    pose_files = {osp.splitext(f)[0] for f in os.listdir(pose_dir) if f.endswith('.txt')}
+    valid_basenames = [
+        osp.splitext(f)[0]
+        for f in rgb_files
+        if osp.splitext(f)[0] in depth_files and osp.splitext(f)[0] in pose_files
+    ]
     out_rgb_dir = osp.join(outdir, split, scene, "color")
     out_depth_dir = osp.join(outdir, split, scene, "depth")
     out_cam_dir = osp.join(outdir, split, scene, "cam")
@@ -49,10 +58,10 @@ def process_scene(args):
     os.makedirs(out_rgb_dir, exist_ok=True)
     os.makedirs(out_depth_dir, exist_ok=True)
     os.makedirs(out_cam_dir, exist_ok=True)
-    for i in tqdm(range(frame_num)):
-        rgb_path = osp.join(rgb_dir, f"{i}.jpg")
-        depth_path = osp.join(depth_dir, f"{i}.png")
-        pose_path = osp.join(pose_dir, f"{i}.txt")
+    for out_idx, basename in enumerate(tqdm(valid_basenames)):
+        rgb_path = osp.join(rgb_dir, f"{basename}.jpg")
+        depth_path = osp.join(depth_dir, f"{basename}.png")
+        pose_path = osp.join(pose_dir, f"{basename}.txt")
 
         rgb = Image.open(rgb_path)
         depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
@@ -61,9 +70,9 @@ def process_scene(args):
         if not np.isfinite(pose).all():
             continue
 
-        out_rgb_path = osp.join(out_rgb_dir, f"{i:05d}.jpg")
-        out_depth_path = osp.join(out_depth_dir, f"{i:05d}.png")
-        out_cam_path = osp.join(out_cam_dir, f"{i:05d}.npz")
+        out_rgb_path = osp.join(out_rgb_dir, f"{out_idx:05d}.jpg")
+        out_depth_path = osp.join(out_depth_dir, f"{out_idx:05d}.png")
+        out_cam_path = osp.join(out_cam_dir, f"{out_idx:05d}.npz")
         np.savez(out_cam_path, intrinsics=depth_intrinsic, pose=pose)
         rgb.save(out_rgb_path)
         cv2.imwrite(out_depth_path, depth)

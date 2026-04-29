@@ -57,3 +57,9 @@ experiments/probe3d/adapter_data_test/
 
 # System files
 .DS_Store
+
+# Local ResearchClaw runtime/cache (project configs under researchclaw/ are kept)
+.researchclaw_cache/
+researchclaw/*.local.yaml
+researchclaw/*.secret.yaml
+researchclaw/*.env
