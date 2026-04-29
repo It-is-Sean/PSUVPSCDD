@@ -75,3 +75,7 @@ Jiacheng explicitly allowed GPU-burning experiments, including ~15-minute cadenc
 ## AutoResearchClaw reference
 
 Jiacheng asked to use AutoResearchClaw as a reference. Local install: `/home/jcd/.openclaw/workspace/projects/external/AutoResearchClaw`, env `/data1/jcd_data/envs/researchclaw-py311`, CLI `/data1/jcd_data/envs/researchclaw-py311/bin/researchclaw`. Read `autoresearchclaw_notes.md` before changing the autonomous loop. Use its stage/contract/checkpoint/HITL patterns, but do not run powerful ResearchClaw commands (`setup`, full `run`, Docker/SSH/Overleaf/server) without config review and a clear proposal-aligned reason.
+
+## Local autopilot replaces ResearchClaw full pipeline
+
+ResearchClaw full pipeline is no longer used for automatic project execution because it drifted into unrelated CIFAR/KD/FitNet experiments. Future autonomous progress should use `local_autopilot_prompt.md` and the local `autoresearch_probe` harness. The only retained ResearchClaw value is high-level planning inspiration and the archived artifacts under ignored result directories.

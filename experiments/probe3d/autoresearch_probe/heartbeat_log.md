@@ -108,3 +108,49 @@
 - Action: stopped ResearchClaw PID 964723 with TERM/KILL as needed, preserved artifacts, and wrote `stage-10/supervisor_stop_reason.md` explaining proposal drift.
 - Result: proxy remains alive, ResearchClaw run is stopped; Git tree remains clean relative to commit `2c83e7d` except ignored ResearchClaw result artifacts. GPU is idle.
 - Next: do not continue this generic ResearchClaw run. If using ResearchClaw again, restart with a local-repo-audit / proposal-constrained configuration that disables generic benchmark/code-generation drift.
+
+## 2026-04-29 14:39 CST — AutoResearchClaw supervisor
+
+**Checked**
+- Process table: ResearchClaw PID `964723` is no longer running; localhost OpenClaw stream proxy PID `964514` is still alive.
+- Latest run: `experiments/probe3d/result/researchclaw/run_20260429_135015`.
+- Latest run artifacts/logs: stages 1-9 completed; stage-09/10 drifted into CIFAR-100 / KD / FitNet / ResNet teacher benchmark artifacts, with `researchclaw_run.log` ending in irrelevant validation failures and OpenCode fallback.
+- Repo audit: `git status --short` was clean before this heartbeat entry; no tracked source/config diffs and no untracked non-ignored files.
+- Proposal alignment check: run artifacts conflict with the PSUVPSC3DD proposal once they move into CIFAR/KD/FitNet. Required line remains frozen visual backbone/VGGT -> lightweight or structured adapter -> frozen NOVA3R-style complete-3D decoder -> complete/amodal sparse-input-frustum reconstruction, evaluated with robust visual-first/fixed-sample metrics. Old `max_interval=30`, two-sample oracle rankings, and single-sample CD remain invalid as claim-level evidence.
+
+**Action**
+- Did not restart ResearchClaw in this pass. The previous supervisor stop is still the correct least-invasive action because the live run had proposal-conflicting direction.
+- Preserved artifacts under `experiments/probe3d/result/researchclaw/run_20260429_135015` and kept the stop/correction notes in `stage-10/supervisor_stop_reason.md`, `stage-10/supervisor_correction.md`, and `stage-10/hitl_guidance.md`.
+
+**Result**
+- Pipeline is stopped, not stuck/hanging. No evidence of new ResearchClaw source edits or messy repo changes since the stop; only ignored result artifacts exist under `experiments/probe3d/result/`.
+- Current ResearchClaw output after stage-09 should be treated as rejected/noise, not as an experiment plan or evidence source.
+
+**Next**
+- Next watch item: before any restart, tighten ResearchClaw to local-repo/proposal-constrained operation (ideally disable generic benchmark generation/OpenCode auto-coding or insert a gate before experiment design), then start a fresh run instead of resuming from the contaminated stage-09/10 path.
+
+## 2026-04-29 14:54 CST — AutoResearchClaw supervisor
+
+**Checked**
+- Process table: ResearchClaw PID `964723` from the run pidfile is no longer running; only the localhost OpenClaw stream proxy PID `964514` remains alive.
+- Latest run: `experiments/probe3d/result/researchclaw/run_20260429_135015`.
+- Latest run artifacts/logs: no new stage artifacts after the previous stage-10 supervisor stop; `checkpoint.json` remains at stage 9, and stage-10 notes record the CIFAR/KD/FitNet proposal drift and stop reason.
+- Repo audit: `git status --short` shows only this supervisor log file modified. Focused diff names contain no project code/config changes. No evidence of ResearchClaw silently editing source files after it was stopped.
+- Proposal alignment: the preserved early ResearchClaw synthesis/hypotheses are partially useful only as planning notes, but the stage-09/10 benchmark-agent path conflicts with the proposal and remains rejected. Required direction remains frozen visual backbone/VGGT -> lightweight or structured adapter -> frozen NOVA3R-style complete-3D decoder -> complete/amodal sparse-input-frustum reconstruction with robust visual-first/fixed-sample metrics. Old `max_interval=30`, two-sample oracle rankings, and single-sample CD must not be used as claim-level evidence.
+
+**Action**
+- Did not restart or resume ResearchClaw. The run is stopped due to proposal drift, not stuck in preflight, so restarting from the contaminated run would be the wrong fix.
+- Preserved existing artifacts and stop/correction notes under the run directory. No proposal/reference files were edited and no duplicate heavy jobs were launched.
+
+**Result**
+- Supervisor state is stable: ResearchClaw remains stopped; proxy remains available if a clean restart is later requested.
+- Code audit is clean except for supervisor-log bookkeeping. Generated outputs remain under `experiments/probe3d/result/`.
+
+**Next**
+- Before any future ResearchClaw restart, tighten `researchclaw/config.arc.yaml` / prompts to local-repo-audit mode and disable or gate generic benchmark/OpenCode auto-coding so it cannot drift into CIFAR/KD-style tasks again.
+
+## 2026-04-29 15:06
+- Checked: Jiacheng decided AutoResearchClaw is not useful and asked 177 to directly continue project advancement.
+- Action: disabled all OpenClaw cron jobs, stopped the ResearchClaw proxy, and added `local_autopilot_prompt.md` to define a 15-minute local project autopilot based on our own `autoresearch_probe` harness rather than ResearchClaw.
+- Result: ResearchClaw full pipeline is retired for execution. Future autonomous work should focus on fixed-sample robust eval, rendering, and proposal-aligned adapter/pseudo-GT controls.
+- Next: install a new 15-minute local autopilot cron and start with fixed-30 robust evaluation for the current MLP baseline.
