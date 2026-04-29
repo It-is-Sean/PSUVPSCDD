@@ -75,14 +75,14 @@ def build_adapter(adapter_type: str, cfg_train: dict, input_dim: int, meta: dict
     if adapter_type == "cross_attention":
         return VGGTToNovaCrossAttentionAdapter(
             **common,
-            num_heads=int(cfg_train.get("adapter_heads", 8)),
-            mlp_ratio=float(cfg_train.get("adapter_mlp_ratio", 2.0)),
+            num_heads=int(cfg_train.get("adapter_heads", cfg_train.get("attention_heads", 8))),
+            mlp_ratio=float(cfg_train.get("adapter_mlp_ratio", cfg_train.get("attention_mlp_ratio", 2.0))),
         )
     if adapter_type == "self_attention":
         return VGGTToNovaSelfAttentionAdapter(
             **common,
-            num_heads=int(cfg_train.get("adapter_heads", 8)),
-            mlp_ratio=float(cfg_train.get("adapter_mlp_ratio", 2.0)),
+            num_heads=int(cfg_train.get("adapter_heads", cfg_train.get("attention_heads", 8))),
+            mlp_ratio=float(cfg_train.get("adapter_mlp_ratio", cfg_train.get("attention_mlp_ratio", 2.0))),
         )
     raise ValueError(f"Unsupported adapter_type={adapter_type!r}")
 

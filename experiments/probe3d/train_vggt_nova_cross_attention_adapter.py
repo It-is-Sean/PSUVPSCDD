@@ -89,6 +89,11 @@ def parse_args():
     parser.add_argument("--train_split", default="train", help="Training split name for the selected dataset.")
     parser.add_argument("--val_split", default="test", help="Validation split name used during training.")
     parser.add_argument("--test_split", default="test", help="Final held-out evaluation split name.")
+    parser.add_argument("--scannet_target_mode", default="complete_zpos", help="ScanNet complete-GT target support: complete_zpos, anchor_frustum, anchor_frustum_margin, covered_by_ge2, ...")
+    parser.add_argument("--scannet_frustum_margin", type=float, default=1.0)
+    parser.add_argument("--scannet_min_views", type=int, default=2)
+    parser.add_argument("--scannet_complete_points", type=int, default=10000)
+    parser.add_argument("--scannet_max_interval", type=int, default=1, help="Maximum processed-frame interval between selected ScanNet views; processed data already uses frame_skip=20, so keep this small for overlap-sensitive probes.")
     parser.add_argument("--num_views", type=int, default=4)
     parser.add_argument("--num_queries", type=int, default=2048)
     parser.add_argument("--save_ply_queries", type=int, default=40960)
@@ -257,6 +262,9 @@ def main():
             cfg, args.batch_size, args.num_workers, test=False, image_root_map=image_root_map,
             dataset_name=args.dataset, data_root=args.data_root, seed=args.seed, num_views=args.num_views,
             split_override=args.train_split, distributed=dist_ctx["enabled"], rank=dist_ctx["rank"], world_size=dist_ctx["world_size"],
+            scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin,
+            scannet_min_views=args.scannet_min_views, scannet_complete_points=args.scannet_complete_points,
+            scannet_max_interval=args.scannet_max_interval,
         )
         val_loader = None
         test_loader = None
@@ -265,12 +273,18 @@ def main():
                 cfg, args.batch_size, max(0, min(args.num_workers, 2)), test=True, image_root_map=image_root_map,
                 dataset_name=args.dataset, data_root=args.data_root, seed=args.seed, num_views=args.num_views,
                 split_override=args.val_split,
+                scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin,
+                scannet_min_views=args.scannet_min_views, scannet_complete_points=args.scannet_complete_points,
+                scannet_max_interval=args.scannet_max_interval,
             )
             if args.final_test:
                 test_loader, _ = build_loader(
                     cfg, args.batch_size, max(0, min(args.num_workers, 2)), test=True, image_root_map=image_root_map,
                     dataset_name=args.dataset, data_root=args.data_root, seed=args.seed, num_views=args.num_views,
                     split_override=args.test_split,
+                    scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin,
+                    scannet_min_views=args.scannet_min_views, scannet_complete_points=args.scannet_complete_points,
+                    scannet_max_interval=args.scannet_max_interval,
                 )
         vggt = load_vggt(device)
         run_eval.vggt = vggt
