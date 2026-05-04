@@ -1,0 +1,17 @@
+direct_readout:
+  baseline_a:
+    type: linear_mlp
+    hidden_dim: 512
+    point_dim: 3
+    depth_dim: 1
+    pose_dim: 7
+  baseline_b:
+    enabled: false
+    type: tiny_transformer
+    layers: 2
+    heads: 8
+    hidden_dim: 512
+  outputs:
+    - pointmap
+    - depth
+    - relative_pose

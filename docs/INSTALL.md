@@ -14,6 +14,39 @@ cd nova3r
 bash setup.sh
 ```
 
+## Reproducible setup for this research fork
+
+This fork is now wired to use the machine's existing conda installation
+(``/data1/jcd_data/miniconda3`` on this node) and create/update the `nova3r`
+environment there. We intentionally do **not** bootstrap a project-local
+Miniconda anymore.
+
+```bash
+cd /path/to/3dprobe
+
+# create/update env `nova3r` using the system conda install
+make probe-env
+
+# verify imports and CUDA
+make probe-env-verify
+```
+
+The workflow is driven by:
+
+- `environment.yml`
+- `scripts/probe/setup_env.sh`
+- `scripts/probe/verify_env.py`
+
+Notes:
+
+- the environment is created as `nova3r`
+- if `pytorch3d` / `chamferdist` compilation fails, the script keeps going in
+  best-effort mode and reports the missing optional pieces at verification time
+- the current probe visualization workflow can fall back to a matplotlib backend
+  even when `pytorch3d` is unavailable
+- if `conda` cannot be found in the known system locations, the setup now fails
+  explicitly instead of installing another Miniconda under the repo
+
 ## Manual Install
 
 ### 1. Clone and create environment
@@ -74,6 +107,15 @@ cd ../../
 ```bash
 bash scripts/download_checkpoints.sh
 ```
+
+Current local research-workspace state on 2026-05-03:
+
+- `checkpoints/scene_n1/checkpoint-last.pth` and `.hydra/config.yaml` are present.
+- `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml` are present.
+- `checkpoints/scene_ae/checkpoint-last.pth` and `.hydra/config.yaml` are present.
+- `checkpoints/vggt/model.pt` is present.
+- Proxy `http://127.0.0.1:7896` was the working route for checkpoint / HuggingFace access on this machine.
+- `swanlab==0.7.16` is installed and importable in conda env `nova3r`.
 
 ### 8. Verify
 

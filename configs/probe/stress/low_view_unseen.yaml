@@ -1,0 +1,9 @@
+stress_tests:
+  low_view:
+    views: [1, 2, 4, 8]
+  unseen_region:
+    report_visible_and_unseen_separately: true
+  budget:
+    decoder_query_budget: [10000, 25000, 50000]
+    latent_dims: [512, 768, 1024]
+    probe_caps: [small, medium, large]

@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import torch
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
@@ -28,8 +30,8 @@ def parse_args():
     parser.add_argument("--pseudo_gt_queries", type=int, default=20000)
     parser.add_argument("--max_target_points", type=int, default=20000)
     parser.add_argument("--resolution", type=int, nargs=2, default=[518, 392], metavar=("WIDTH", "HEIGHT"))
-    parser.add_argument("--feature_ckpt", default="/home/wdh/nova3r/checkpoints/scene_n2/checkpoint-last.pth")
-    parser.add_argument("--pseudo_gt_ckpt", default="/home/wdh/nova3r/checkpoints/scene_n2/checkpoint-last.pth")
+    parser.add_argument("--feature_ckpt", default="checkpoints/scene_n2/checkpoint-last.pth")
+    parser.add_argument("--pseudo_gt_ckpt", default="checkpoints/scene_n2/checkpoint-last.pth")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--manifest_only", action="store_true")
     parser.add_argument("--max_samples", type=int, default=None)

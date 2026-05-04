@@ -1,0 +1,18 @@
+sweeps:
+  layers:
+    generic: [early, mid, final]
+    report_priority: [mid, final]
+  video_timesteps:
+    enabled: true
+    search_space: [0.1, 0.2, 0.3, 0.4, 0.5]
+    note: keep the initial sweep inside an early/mid window
+  adapter_sizes:
+    - name: small
+      scene_tokens: 32
+      refinement_layers: 0
+    - name: medium
+      scene_tokens: 48
+      refinement_layers: 1
+    - name: large
+      scene_tokens: 64
+      refinement_layers: 1

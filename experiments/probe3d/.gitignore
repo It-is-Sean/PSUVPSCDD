@@ -1,6 +1,9 @@
 features/
 checkpoints/
 outputs/
+result/
+runs/
+adapter_data_test/
 *.pt
 *.pth
 *.ckpt

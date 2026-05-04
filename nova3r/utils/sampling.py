@@ -83,7 +83,13 @@ def sample_farthest_points(
 
     with torch.no_grad():
         # pyre-fixme[16]: `pytorch3d_._C` has no attribute `sample_farthest_points`.
-        idx = _C.sample_farthest_points(points, lengths, K, start_idxs)
+        # Some PyTorch3D builds require an explicit max_K argument while older
+        # ones infer it from K. Support both so NOVA-style src_complete_fps_*
+        # target sampling works across local environments.
+        try:
+            idx = _C.sample_farthest_points(points, lengths, K, start_idxs)
+        except TypeError:
+            idx = _C.sample_farthest_points(points, lengths, K, start_idxs, int(K.max().item()))
     sampled_points = masked_gather(points, idx)
 
     return sampled_points, idx

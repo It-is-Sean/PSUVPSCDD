@@ -1,0 +1,12 @@
+stage1:
+  source: NOVA3R Stage 1
+  checkpoint: checkpoints/scene_ae/checkpoint-last.pth
+  latent_tokens: 32
+  token_dim: 768
+  decoder_query_budget: 50000
+  inference_steps: 100
+  solver: euler
+  freeze_decoder: true
+  notes:
+    - Reuse the Stage-1 latent-to-point decoder family as the canonical probe interface.
+    - Any future decoder-family comparison must be reported as an extension, not mixed into the main claim.
