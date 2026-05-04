@@ -19,6 +19,9 @@ runs/
 tensorboard/
 outputs/
 eval_results/
+slurm_out/*
+!slurm_out/.gitkeep
+slurm/.secrets.env
 
 # Datasets and checkpoints
 /datasets/
@@ -42,6 +45,7 @@ experiments/probe3d/features/
 experiments/probe3d/checkpoints/
 experiments/probe3d/outputs/
 experiments/probe3d/result/
+experiments/probe3d/adapter_data/
 experiments/probe3d/adapter_data_test/
 
 # Large geometry / video outputs
@@ -57,9 +61,3 @@ experiments/probe3d/adapter_data_test/
 
 # System files
 .DS_Store
-
-# Local ResearchClaw runtime/cache (project configs under researchclaw/ are kept)
-.researchclaw_cache/
-researchclaw/*.local.yaml
-researchclaw/*.secret.yaml
-researchclaw/*.env
