@@ -28,7 +28,6 @@ DEFAULT_VGGT_WEIGHTS_CANDIDATES = [
 ]
 DEFAULT_NOVA_CKPT_CANDIDATES = [
     REPO_ROOT / "checkpoints/scene_ae/checkpoint-last.pth",
-    Path.home() / ".openclaw/workspace/projects/probe/checkpoints/scene_ae/checkpoint-last.pth",
 ]
 DEFAULT_NOVA_CKPT = DEFAULT_NOVA_CKPT_CANDIDATES[0]
 DEFAULT_DUST3R_SRC = Path.home() / "CUT3R/src"

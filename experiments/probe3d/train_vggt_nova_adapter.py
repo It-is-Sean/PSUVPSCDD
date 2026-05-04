@@ -141,8 +141,9 @@ def parse_args():
     parser.add_argument("--output_dir", default="experiments/probe3d/result/vggt23_nova_adapter_long_seed17")
     parser.add_argument("--debug_one_batch", action="store_true")
     parser.add_argument("--nova_ckpt", default=None)
+    parser.add_argument("--vggt_weights", default=None, help="Optional local VGGT-1B model.pt path; avoids network fallback on Slurm nodes.")
     parser.add_argument("--dataset", default="scrream_adapter", choices=("scrream_adapter", "scannet"))
-    parser.add_argument("--data_root", default=None, help="Dataset root for --dataset scannet; default /data1/jcd_data/scannet_processed_large")
+    parser.add_argument("--data_root", default=None, help="Dataset root for --dataset scannet, or adapter .pt path for --dataset scrream_adapter.")
     parser.add_argument("--train_split", default="train", help="Training split name for the selected dataset.")
     parser.add_argument("--val_split", default="test", help="Validation split name used during training.")
     parser.add_argument("--test_split", default="test", help="Final held-out evaluation split name.")
@@ -390,7 +391,7 @@ def main():
                     scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin, scannet_min_views=args.scannet_min_views,
                     scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
                 )
-        vggt = load_vggt(device)
+        vggt = load_vggt(device, weights_path=args.vggt_weights)
         run_eval.vggt = vggt
         feature_cache = {}
         run_eval.feature_cache = feature_cache
@@ -482,6 +483,8 @@ def main():
                 "world_size": dist_ctx["world_size"],
                 "visible_cuda_device_count": torch.cuda.device_count() if device.type == "cuda" else 0,
                 "nova_decoder_meta": meta,
+                "nova_ckpt": str(args.nova_ckpt) if args.nova_ckpt else None,
+                "vggt_weights": str(args.vggt_weights) if args.vggt_weights else None,
                 "dataset": {"data_root": data_args.data_root, "test_dataset_name": data_args.test_dataset_name},
                 "image_root_map": args.image_root_map,
             }

@@ -136,4 +136,4 @@ It is a **baseline for feasibility**, not the final headline method.
 
 1. verify the formal MLP run starts and remains stable
 2. use the same processed split + DDP stack for CA / SA comparisons
-3. keep the corrected full-data SCRREAM rerun as a separate branch once that data is available
+3. keep the corrected full-data SCRREAM mesh-complete branch separate from ScanNet diagnostics

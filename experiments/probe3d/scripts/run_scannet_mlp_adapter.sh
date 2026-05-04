@@ -5,7 +5,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$REPO_ROOT"
 
 DATA_ROOT=${DATA_ROOT:-/data1/jcd_data/scannet_processed_large_f20_vhclean500k_split_seed17}
-NOVA_CKPT=${NOVA_CKPT:-/home/jcd/.openclaw/workspace/projects/probe/checkpoints/scene_ae/checkpoint-last.pth}
+NOVA_CKPT=${NOVA_CKPT:-checkpoints/scene_ae/checkpoint-last.pth}
 PYTHON_BIN=${PYTHON_BIN:-/data1/jcd_data/miniconda3/envs/nova3r/bin/python}
 TORCHRUN_BIN=${TORCHRUN_BIN:-/data1/jcd_data/miniconda3/envs/nova3r/bin/torchrun}
 NPROC_PER_NODE=${NPROC_PER_NODE:-8}
@@ -29,10 +29,9 @@ RESUME=${RESUME:-}
 export DATA_ROOT BATCH_SIZE NPROC_PER_NODE NUM_VIEWS
 
 mapfile -t SCHEDULE < <("$PYTHON_BIN" - <<'PY'
-import contextlib, math, sys
-sys.path.insert(0, '/home/jcd/PSUVPSC3DD_repo')
+import contextlib, math, os, sys
+sys.path.insert(0, os.getcwd())
 from experiments.probe3d.vggt_nova_adapter_common_raw import build_scannet_loader
-import os
 root=os.environ['DATA_ROOT']
 batch_size=int(os.environ['BATCH_SIZE'])
 world_size=int(os.environ['NPROC_PER_NODE'])

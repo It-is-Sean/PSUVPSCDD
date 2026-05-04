@@ -1,6 +1,6 @@
 # Probing Image and Video Foundation Representations via Shared Complete-3D Decoding
 
-> Canonical project-local copy of the proposal for the integrated `PSUVPSC3DD_repo` research fork.
+> Canonical project-local copy of the proposal for this integrated research fork.
 > Detailed project memory remains in `PROJECT.md`.
 > Working docs and follow-up notes live under `docs/probe/`.
 

@@ -1,6 +1,114 @@
 # Experiment history summary
 
-## 2026-04-29 correction block — interval, metric, and ResearchClaw
+## 2026-05-03 SCRREAM full-data mesh-complete bridge
+
+The corrected SCRREAM branch is active again because the full dataset is now present at:
+
+- `~/datasets/SCRREAM`
+
+This does not revive the old `eval_scrream` results. Those remain invalid for formal claims because they used the released evaluation subset. The corrected branch uses the full SCRREAM directory structure and the official two-view pair list:
+
+- `data/scrream/scrream_n2_list.json`
+
+### Implemented data bridge
+
+Added and extended:
+
+- `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py`
+
+The script writes adapter `.pt` datasets compatible with `AdapterImagePointDataset`:
+
+- `scene_ids`
+- `target_points`
+- `splits`
+- per-sample `metadata`
+- global `meta`
+
+The training loader was also corrected so:
+
+```bash
+python experiments/probe3d/train_vggt_nova_adapter.py \
+  --dataset scrream_adapter \
+  --data_root experiments/probe3d/adapter_data/<adapter_dataset>.pt
+```
+
+actually reads the requested `.pt` instead of falling back to the default adapter path.
+
+### Target-source decision
+
+The first bridge supported `depth_gt_dense`: aggregate `depth_gt` frames between the two input frames, voxel-deduplicate, crop to the input frustum, and sample a fixed target.
+
+After discussion, this is now an alternate baseline rather than the main path. Dense depth aggregation can include surfaces not visible in the first input frame when intermediate frames saw them, but it is still limited by observed depth frames. It is not a truly complete mesh target.
+
+The active target source is now:
+
+- `--target_source mesh_complete`
+
+Mesh-complete semantics:
+
+1. read `sceneXX/meshes/*.obj`
+2. sample scene mesh surfaces
+3. voxel-deduplicate and cache a per-scene reservoir
+4. crop world points to the selected input pair's union frustum
+5. transform the final target into the first input camera frame
+6. deterministic FPS to `10000` points
+
+This is closer to the desired adapter target: complete / amodal geometry inside the selected input-view frustum, without asking the model to reconstruct the entire room outside that frustum.
+
+### Area-proportional mesh sampling correction
+
+The first mesh-complete preview sampled roughly equal point counts per OBJ. That made large background assets such as walls and room shells too sparse compared with small object meshes.
+
+The mesh reservoir was corrected to allocate samples proportional to estimated mesh surface area. Example effect for `scene09`: the room/background mesh receives the dominant share of samples, while smaller objects receive smaller budgets. The accepted preview path is:
+
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_area_n2_preview/scene09_mesh_complete_area_world_reservoir.ply`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_area_n2_preview/scene09_mesh_complete_area_first_view_reservoir.ply`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_area_n2_preview/scene09__scene09_full_00_000200_000275_target_first_view.ply`
+
+The user visually accepted this preview, so area-proportional mesh sampling is the current default.
+
+### Slurm handoff
+
+The machine uses Slurm. New job scripts:
+
+- `slurm/scrream_mesh_complete_prepare.sbatch`
+- `slurm/scrream_mesh_complete_mlp_train.sbatch`
+- `slurm/scrream_mesh_complete_mlp_smoke.sbatch`
+
+Logs are written to:
+
+- `slurm_out/`
+
+The Slurm scripts default proxy variables to `http://127.0.0.1:7896`, matching the working network path used for checkpoint downloads and SwanLab access.
+
+Checkpoint and tracking setup completed:
+
+- `checkpoints/scene_n1/checkpoint-last.pth` and `.hydra/config.yaml`
+- `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml`
+- `checkpoints/scene_ae/checkpoint-last.pth` and `.hydra/config.yaml`
+- `checkpoints/vggt/model.pt`
+- `swanlab==0.7.16` imports in the `nova3r` conda env
+
+The SCRREAM training path now normalizes adapter `.pt` targets with the NOVA decoder checkpoint's `norm_mode` before the `nova_flow` loss. The local `scene_ae` metadata reports `norm_mode=median_3`.
+
+Full data generation and dependent training have now been submitted:
+
+- `85773` / `scrream_mesh_prep`: running on `air-node-04` at 2026-05-03 02:26 CST
+- `85774` / `scrream_mesh_mlp`: pending on dependency after `85773`
+
+At that timestamp, the full output files had not yet been written:
+
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.manifest.json`
+
+Status commands:
+
+```bash
+squeue -j 85773,85774 -o '%.18i %.30j %.8T %.10M %.9l %.30R'
+sacct -j 85773,85774 --format=JobID,JobName%30,State,ExitCode,Elapsed,Start,End,NodeList%20
+```
+
+## 2026-04-29 correction block — interval and metric
 
 A major audit corrected the interpretation of the ScanNet runs:
 
@@ -10,20 +118,18 @@ A major audit corrected the interpretation of the ScanNet runs:
 - Oracle CD rankings were dominated by tiny sample counts, stochastic decoder sampling, flow-vs-CD mismatch, and outlier samples; they are no longer treated as reliable target-mode rankings.
 - Robust evaluation of the interval-corrected MLP baseline shows moderate recall but poor precision/outlier control, matching the qualitative failure.
 
-AutoResearchClaw was briefly installed and configured as a research-loop organizer, but its full-pipeline execution was retired on 2026-04-29 after proposal drift into unrelated CIFAR/KD/FitNet work. The current active automation is local OpenClaw autopilot over `experiments/probe3d/autoresearch_probe/`.
-
 
 This document records what actually happened, including corrections.
 
-## 2026-04-29 late-afternoon handoff update
+## 2026-04-29 evening handoff update
 
-ResearchClaw full-pipeline execution is retired for this project. The previous ResearchClaw run drifted into unrelated CIFAR/KD/FitNet/ResNet-teacher experiments, so its later stage artifacts are rejected as execution guidance. The retained automation is a local OpenClaw autopilot over `experiments/probe3d/autoresearch_probe/`, with Chinese Feishu follow-ups and fixed proposal guardrails.
-
-The repository was pushed to `dongjiacheng06/3dprobe` on branch `wip/psuvpsc3dd-autoresearch-20260429` for server handoff. See `docs/probe/handoff_2026-04-29.md`.
+The local cleanup branch is now `wip/psuvpsc3dd-probe-20260429` for server handoff. Push that branch before using the handoff commands in `docs/probe/handoff_2026-04-29.md`.
 
 Fixed-30 robust eval of the K2/interval=1 MLP-L4/chamfer baseline confirmed the main failure mode: F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204`, recall@0.05 mean `0.532`, with strong prediction-side outlier issues.
 
 A lightweight K2/interval=1 cross-attention candidate (`p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000`) completed 1000 steps with validation CD `0.54222615`. This is not a scalar improvement over MLP and should only be interpreted after fixed-30 robust eval/renders.
+
+After this diagnosis, the 2026-04-29 planned data direction was an InteriorGS-style high-quality indoor 3DGS pilot on this server. That plan is now deferred because the full SCRREAM dataset became available locally on 2026-05-03 and the mesh-complete SCRREAM branch became the active training line.
 
 ## 1. Major correction — old SCRREAM results are invalid for claims
 
@@ -102,7 +208,7 @@ These runs matter because they show the current formal branch is not just a pape
 
 ## 5. Superseded formal baseline run
 
-The earlier formal run target was the **ScanNet MLP baseline**. This remains part of the history, but the active direction was later superseded by the shorter autoresearch-style probe in Section 6.
+The earlier formal run target was the **ScanNet MLP baseline**. This remains part of the history, but the active direction was later superseded by the shorter ScanNet probe in Section 6.
 
 ### Purpose
 This is not meant as the final headline method.
@@ -125,11 +231,11 @@ can learn stable complete 3D behavior under reliable mesh-first supervision at s
 ### Formal output dir
 - `experiments/probe3d/result/scannet_mlp_adapter_l4_lr5e-5_seed17_epoch50_formal`
 
-## 6. Autoresearch-style ScanNet probe update — objective mismatch isolated
+## 6. Short ScanNet probe update — objective mismatch isolated
 
 A short harness was added under:
 
-- `experiments/probe3d/autoresearch_probe/`
+- `experiments/probe3d/probe_trials/`
 
 The purpose was to stop relying on a long formal run and instead test target modes / objectives quickly with immutable logging in `results.tsv`.
 
@@ -180,10 +286,11 @@ The cleanest honest reading of the repo on 2026-04-29 is:
 
 - old SCRREAM eval-subset claims are invalid
 - the engineering stack survived that correction
-- the ScanNet v2 mesh-first line is now the main trustworthy scale-up path
+- the ScanNet v2 mesh-first line was the main trustworthy scale-up path before the full SCRREAM data became available locally on 2026-05-03
 - the current best numeric baseline is `anchor_frustum + MLP-L4 + direct Chamfer`, CD `0.08745259`
 - that numeric result is not visually clean enough: recall is acceptable, precision / outlier control is poor
-- the next milestone is a precision-aware loss and visual improvement, before CA / SA comparison
+- at that timestamp, the next milestone was an InteriorGS data bridge and visual sanity pass before new training; this was later superseded on 2026-05-03 by the full SCRREAM mesh-complete branch
+
 ## 8. Paper-aligned GT / loss correction after user review
 
 Jiacheng clarified that NOVA3R's completion target is not a full-room point cloud. It is a complete / amodal point cloud **within the selected input-view frustum**: for example, if a table is in view, the model should recover surfaces such as the underside of the table within that frustum, not hallucinate the entire room.
@@ -194,9 +301,9 @@ Implementation started:
 
 - added explicit `nova_input_frustum` alias for union-of-selected-input-frusta complete targets
 - added `nova_anchor_frustum` alias for K=1 / first-view debug targets
-- exposed `scannet_complete_points` through loader, oracle, adapter, and autoresearch harness
+- exposed `scannet_complete_points` through loader, oracle, adapter, and the probe harness
 - added `query_source` passthrough in the harness so trials can use `src_complete_fps_4096`
-- created `experiments/probe3d/autoresearch_probe/configs/phase2_nova_aligned.json` with K=1/K=2 oracle and MLP-L4 native-flow adapter trials
+- created `experiments/probe3d/probe_trials/configs/phase2_nova_aligned.json` with K=1/K=2 oracle and MLP-L4 native-flow adapter trials
 
 Next result to record: K=1/K=2 oracle support for `nova_input_frustum + src_complete_fps_4096`.
 
@@ -210,7 +317,7 @@ Implementation notes:
 - `nova_input_frustum`: union of the selected input-view frusta, collapsed into the existing `pts3d_complete` target path.
 - `nova_per_view_frustum`: each input view contributes its own complete frustum crop, matching NOVA's `get_complete_pts3d()` per-view stacking convention more literally.
 - `nova_per_view_frustum_anchor_zpos`: same as per-view but clipped to positive anchor-camera z for ScanNet stability.
-- Exposed `scannet_complete_points` and `query_source` through the autoresearch harness.
+- Exposed `scannet_complete_points` and `query_source` through the probe harness.
 - Fixed two runtime issues discovered by controls: ScanNet `num_views=1` sequence sampling crashed in `get_seq_from_start_id`, and local PyTorch3D FPS requires an explicit `max_K` argument.
 
 Oracle results on the first two val samples were not promising:
@@ -255,7 +362,7 @@ The current active run is the K=2 / MLP-L4-H1024 / `anchor_frustum` loss ablatio
 
 Driver log:
 
-- `experiments/probe3d/result/autoresearch_probe/p4_k2_mlp_l4_loss_ablation_driver.out`
+- `experiments/probe3d/result/probe_trials/p4_k2_mlp_l4_loss_ablation_driver.out`
 
 As of the documentation update, the first run was active around step ~676.
 
@@ -265,8 +372,8 @@ A continuation script waits for the active MLP-L4 loss ablation to finish and th
 
 Script / driver:
 
-- script: `experiments/probe3d/result/autoresearch_probe/p4_overnight_after_l4_ablation.sh`
-- driver log: `experiments/probe3d/result/autoresearch_probe/p4_overnight_after_l4_ablation_driver.out`
+- script: `experiments/probe3d/result/probe_trials/p4_overnight_after_l4_ablation.sh`
+- driver log: `experiments/probe3d/result/probe_trials/p4_overnight_after_l4_ablation_driver.out`
 - launcher PID at creation time: `339478`
 
 Queued oracle GT candidates:
@@ -287,7 +394,7 @@ Queued adapter target/loss candidates:
 - views: K=2
 - queries: `2048`
 
-### How to interpret tomorrow's results
+### How to interpret the 2026-04-29 follow-up results
 
 The primary feasibility claim should come from the best K=2 result that satisfies both conditions:
 
@@ -309,4 +416,4 @@ The overnight plan was updated to longer adapter schedules:
 
 New long-suite driver:
 
-- `experiments/probe3d/result/autoresearch_probe/p4_overnight_k2_mlp_l4_long_driver.out`
+- `experiments/probe3d/result/probe_trials/p4_overnight_k2_mlp_l4_long_driver.out`

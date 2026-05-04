@@ -1,15 +1,16 @@
 # Experiment plan from the current state
 
-## Current plan override — 2026-04-29 late afternoon
+## Current plan override — 2026-05-03
 
 Older phase labels below remain useful history, but the next valid plan is now:
 
-1. **Use the corrected interval.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines.
-2. **Use fixed robust evaluation before claims.** Compare checkpoints on the fixed 30-sample K2/interval=1 manifest with one-sided distances, F-score thresholds, trimmed CD, and representative renders.
-3. **Treat MLP as a precision/outlier failure baseline.** The K2/interval=1 MLP-L4/chamfer checkpoint has fixed-30 F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204`, and recall@0.05 mean `0.532`.
-4. **Do not continue blind MLP sweeps.** Test structured/query-conditioned adapters or token/pseudo-GT diagnostics under the same robust protocol.
-5. **Current structured-adapter check.** `p7_k2_i1_anchor_ca_l2_h512_chamfer_step1000` completed with validation CD `0.54222615`; it needs fixed-30 robust eval/renders before interpretation.
-6. **ResearchClaw boundary.** ResearchClaw full-pipeline execution is retired after proposal drift; only local repo/proposal-constrained audit ideas may be reused.
+1. **Use full SCRREAM, not `eval_scrream`.** The old local SCRREAM subset remains invalid for claims. The corrected branch uses `~/datasets/SCRREAM`.
+2. **Use mesh-complete SCRREAM targets first.** The current default GT source is registered scene meshes sampled proportional to surface area, cropped to the selected two-view union frustum, and stored in the first input camera frame.
+3. **Launch through Slurm.** Data generation and training scripts live in `slurm/`; logs go to `slurm_out/`.
+4. **Generate before training.** The full adapter `.pt` generation job `85773` was running at 2026-05-03 02:26 CST, with dependent MLP training job `85774` pending. Verify shape / metadata / previews before interpreting training.
+5. **Train the MLP baseline before method sprawl.** First baseline is `adapter_type=mlp`, `adapter_layers=4`, `adapter_hidden_dim=1024`, `loss_type=nova_flow`, `num_queries=10000`.
+6. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
+7. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
 
 This plan is intentionally short and tied to what is already real in the repo.
 
@@ -36,7 +37,7 @@ This plan is intentionally short and tied to what is already real in the repo.
 - complete-GT smoke validation
 - full-root DDP preflight validation
 
-## Phase 2 — Autoresearch-style ScanNet probe baseline
+## Phase 2 — Short ScanNet probe baseline
 
 ### Goal
 Quickly identify whether the failure comes from target definition, adapter capacity, or objective mismatch.
@@ -95,15 +96,67 @@ After the paper-aligned native-flow MLP baseline is meaningful:
 2. launch SA on the same processed data / target / objective
 3. compare them only after all branches have comparable runs and visualizations
 
-## Phase 5 — Return to corrected SCRREAM
+## Phase 5 — InteriorGS high-quality data pilot
 
-After the ScanNet branch is stabilized:
+InteriorGS-style high-quality indoor 3DGS data is deferred until after the corrected SCRREAM full-data baseline is generated, trained, and inspected.
 
-1. wait for the official full SCRREAM dataset root
-2. reconnect the corrected SCRREAM line to the proper data
-3. rerun the adapter branches under the correct dataset assumptions
+Immediate steps:
 
-## Phase 6 — Proposal-facing interpretation
+1. download or stage a small InteriorGS subset on the server;
+2. inspect scene assets (`3dgs_compressed.ply`, `labels.json`, occupancy files,
+   and `structure.json`);
+3. document coordinate transforms and metric units;
+4. export a small target-point/render sanity set in the current probe convention;
+5. create a fixed tiny train/val/test split and only then launch a training smoke.
+
+See `interiorgs_training_plan.md`.
+
+## Phase 6 — Corrected SCRREAM full-data branch
+
+Current status:
+
+1. full SCRREAM data is available locally at `~/datasets/SCRREAM`
+2. data bridge exists at `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py`
+3. loader honors `--dataset scrream_adapter --data_root <adapter.pt>`
+4. mesh-complete preview for `scene09` has been visually accepted
+5. Slurm scripts exist for data preparation and MLP adapter training
+6. checkpoints are staged under `checkpoints/` for NOVA `scene_n1`, `scene_n2`, `scene_ae`, and VGGT
+7. SwanLab is installed in `nova3r`, and the full MLP Slurm script enables it by default
+8. job `85773` is preparing the full adapter `.pt`; job `85774` is pending on `85773`
+
+GT construction:
+
+1. read official two-view pairs from `data/scrream/scrream_n2_list.json`
+2. use the two RGB frames as adapter inputs
+3. sample `sceneXX/meshes/*.obj` surfaces proportional to surface area
+4. voxel-deduplicate and cache a per-scene mesh reservoir
+5. crop points to the union frustum of the two input views
+6. transform the target to the first input camera coordinate frame
+7. FPS sample or pad to `10000` target points
+
+Current Slurm chain:
+
+```bash
+squeue -j 85773,85774 -o '%.18i %.30j %.8T %.10M %.9l %.30R'
+sacct -j 85773,85774 --format=JobID,JobName%30,State,ExitCode,Elapsed,Start,End,NodeList%20
+```
+
+Do not resubmit the default full prep/train jobs while `85773` / `85774` are still active.
+
+Smoke variants can override script defaults through environment variables:
+
+```bash
+SCRREAM_ADAPTER_OUT=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_smoke8.pt \
+SCRREAM_EXTRA_ARGS="--max_samples 8 --save_preview_dir experiments/probe3d/adapter_data/scrream_mesh_complete_smoke8_preview" \
+sbatch slurm/scrream_mesh_complete_prepare.sbatch
+
+SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_smoke8.pt \
+SCRREAM_MAX_STEPS=100 \
+SCRREAM_OUTPUT_DIR=experiments/probe3d/result/scrream_mesh_complete_smoke8_mlp \
+sbatch slurm/scrream_mesh_complete_mlp_train.sbatch
+```
+
+## Phase 7 — Proposal-facing interpretation
 
 Only after the above:
 
@@ -156,7 +209,7 @@ Adapter sweep:
 
 ### Morning checklist
 
-1. Inspect `experiments/probe3d/autoresearch_probe/results.tsv` rows beginning with `p4_`.
+1. Inspect `experiments/probe3d/probe_trials/results.tsv` rows beginning with `p4_`.
 2. Check whether K=2 MLP-L4 improves over previous K=4 feasibility runs.
 3. Compare oracle ceiling vs adapter result for each target.
 4. Inspect generated PLYs for the best metric candidates.
@@ -173,4 +226,4 @@ Per user request, overnight adapter trials were increased from `1000` to `2000` 
 
 Driver log:
 
-- `experiments/probe3d/result/autoresearch_probe/p4_overnight_k2_mlp_l4_long_driver.out`
+- `experiments/probe3d/result/probe_trials/p4_overnight_k2_mlp_l4_long_driver.out`

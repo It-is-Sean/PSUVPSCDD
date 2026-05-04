@@ -22,7 +22,7 @@ environment there. We intentionally do **not** bootstrap a project-local
 Miniconda anymore.
 
 ```bash
-cd /home/jcd/PSUVPSC3DD_repo
+cd /path/to/3dprobe
 
 # create/update env `nova3r` using the system conda install
 make probe-env
@@ -107,6 +107,15 @@ cd ../../
 ```bash
 bash scripts/download_checkpoints.sh
 ```
+
+Current local research-workspace state on 2026-05-03:
+
+- `checkpoints/scene_n1/checkpoint-last.pth` and `.hydra/config.yaml` are present.
+- `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml` are present.
+- `checkpoints/scene_ae/checkpoint-last.pth` and `.hydra/config.yaml` are present.
+- `checkpoints/vggt/model.pt` is present.
+- Proxy `http://127.0.0.1:7896` was the working route for checkpoint / HuggingFace access on this machine.
+- `swanlab==0.7.16` is installed and importable in conda env `nova3r`.
 
 ### 8. Verify
 

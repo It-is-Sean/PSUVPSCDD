@@ -5,7 +5,7 @@ REPO_ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$REPO_ROOT"
 
 DATA_ROOT=${DATA_ROOT:-/data1/jcd_data/scannet_processed_large_f20_vhclean500k_split_seed17}
-NOVA_CKPT=${NOVA_CKPT:-/home/jcd/.openclaw/workspace/projects/probe/checkpoints/scene_ae/checkpoint-last.pth}
+NOVA_CKPT=${NOVA_CKPT:-checkpoints/scene_ae/checkpoint-last.pth}
 TORCHRUN_BIN=${TORCHRUN_BIN:-/data1/jcd_data/miniconda3/envs/nova3r/bin/torchrun}
 NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 MASTER_PORT=${MASTER_PORT:-29603}

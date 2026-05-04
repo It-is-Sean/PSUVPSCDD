@@ -38,7 +38,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--seed", type=int, default=17)
     p.add_argument("--device", default="cuda")
-    p.add_argument("--nova_ckpt", default="/home/jcd/.openclaw/workspace/projects/probe/checkpoints/scene_ae/checkpoint-last.pth")
+    p.add_argument("--nova_ckpt", default="checkpoints/scene_ae/checkpoint-last.pth")
     p.add_argument("--data_root", default="/data1/jcd_data/scannet_processed_large_f20_vhclean500k_split_seed17")
     p.add_argument("--split", default="val")
     p.add_argument("--max_scenes", type=int, default=1)

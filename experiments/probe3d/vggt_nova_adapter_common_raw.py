@@ -28,7 +28,12 @@ DEFAULT_VGGT_WEIGHTS_CANDIDATES = [
     REPO_ROOT / "checkpoints" / "vggt" / "model.pt",
     REPO_ROOT / "artifacts" / "weights" / "vggt" / "VGGT-1B" / "model.pt",
 ]
-DEFAULT_NOVA_CKPT = REPO_ROOT / "checkpoints/scene_ae/checkpoint-last.pth"
+DEFAULT_NOVA_CKPT_CANDIDATES = [
+    REPO_ROOT / "checkpoints/scene_ae/checkpoint-last.pth",
+    Path("/data1/jcd_data/checkpoints/scene_ae/checkpoint-last.pth"),
+    Path("/data1/jcd_data/nova3r/checkpoints/scene_ae/checkpoint-last.pth"),
+]
+DEFAULT_NOVA_CKPT = DEFAULT_NOVA_CKPT_CANDIDATES[0]
 DEFAULT_DUST3R_SRC = Path.home() / "CUT3R/src"
 DEFAULT_ADAPTER_DATA = PROBE3D_ROOT / "result/scrream_adapter_full_seed17.pt"
 DEFAULT_SCANNET_ROOT = Path("/data1/jcd_data/scannet_processed_large")
@@ -41,6 +46,22 @@ def resolve_vggt_weights(weights_path: str | None = None) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def resolve_nova_ckpt(ckpt_path: str | Path | None = None) -> Path:
+    if ckpt_path is not None:
+        path = Path(ckpt_path)
+        if path.exists():
+            return path
+        raise FileNotFoundError(f"Requested NOVA checkpoint does not exist: {path}")
+    for candidate in DEFAULT_NOVA_CKPT_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    searched = "\n".join(str(path) for path in DEFAULT_NOVA_CKPT_CANDIDATES)
+    raise FileNotFoundError(
+        "Could not find a NOVA Stage-1 scene autoencoder checkpoint. "
+        f"Set --nova_ckpt explicitly. Searched:\n{searched}"
+    )
 
 
 def add_repo_paths() -> None:
@@ -204,18 +225,18 @@ def select_vggt_layer23(features: list[torch.Tensor]) -> tuple[torch.Tensor, int
     return features[idx], idx, reason
 
 
-def load_experiment_config(ckpt_path: str | Path = DEFAULT_NOVA_CKPT):
-    ckpt_path = Path(ckpt_path)
+def load_experiment_config(ckpt_path: str | Path | None = DEFAULT_NOVA_CKPT):
+    ckpt_path = resolve_nova_ckpt(ckpt_path)
     config_path = ckpt_path.parent / ".hydra/config.yaml"
     cfg = OmegaConf.load(config_path)
     return cfg.experiment if "experiment" in cfg else cfg
 
 
-def build_decoder(device: torch.device, ckpt_path: str | Path = DEFAULT_NOVA_CKPT):
+def build_decoder(device: torch.device, ckpt_path: str | Path | None = DEFAULT_NOVA_CKPT):
     add_repo_paths()
     from nova3r.heads.pts3d_decoder import PointJointFMDecoderV2
 
-    ckpt_path = Path(ckpt_path)
+    ckpt_path = resolve_nova_ckpt(ckpt_path)
     cfg = load_experiment_config(ckpt_path)
     params = dict(cfg.model.params.cfg.pts3d_head.params)
     decoder = PointJointFMDecoderV2(**params).to(device)
@@ -456,10 +477,11 @@ def build_loader(
     if dataset_name != "scrream_adapter":
         raise ValueError(f"Unsupported dataset_name={dataset_name!r}")
     split = split_override or ("test" if test else "train")
+    dataset_path = Path(data_root) if data_root else DEFAULT_ADAPTER_DATA
     try:
-        dataset = AdapterImagePointDataset(DEFAULT_ADAPTER_DATA, split=split, image_root_map=image_root_map)
+        dataset = AdapterImagePointDataset(dataset_path, split=split, image_root_map=image_root_map)
     except ValueError:
-        dataset = AdapterImagePointDataset(DEFAULT_ADAPTER_DATA, split=None, image_root_map=image_root_map)
+        dataset = AdapterImagePointDataset(dataset_path, split=None, image_root_map=image_root_map)
     sampler = None
     if distributed:
         sampler = DistributedSampler(
@@ -481,11 +503,11 @@ def build_loader(
     )
     data_args = OmegaConf.create(
         {
-            "data_root": str(DEFAULT_ADAPTER_DATA),
+            "data_root": str(dataset_path),
             "test_dataset_name": f"adapter_precomputed_{split}",
         }
     )
-    print(f"Building adapter image/point loader from {DEFAULT_ADAPTER_DATA}, split={split}, len={len(dataset)}")
+    print(f"Building adapter image/point loader from {dataset_path}, split={split}, len={len(dataset)}")
     return loader, data_args
 
 
@@ -547,6 +569,37 @@ def images_from_batch(batch: list[dict[str, Any]]) -> torch.Tensor:
     return torch.stack(imgs, dim=1)
 
 
+def normalize_targets_like_nova(
+    pts3d_src: torch.Tensor,
+    valid_src: torch.Tensor,
+    pts3d_trg: torch.Tensor,
+    valid_trg: torch.Tensor,
+    mode: str = "none",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Local copy of NOVA median normalization without importing sampling deps."""
+    if mode == "none":
+        return pts3d_src, pts3d_trg
+    if "median" not in mode:
+        raise NotImplementedError(f"Unsupported SCRREAM adapter norm_mode={mode!r}")
+
+    target_median = 1.0 if mode == "median" else float(mode.split("_")[-1])
+    src_norm = []
+    trg_norm = []
+    for b in range(pts3d_src.shape[0]):
+        src_xyz = pts3d_src[b]
+        trg_xyz = pts3d_trg[b]
+        trg_valid = valid_trg[b]
+        valid_dis = trg_xyz.norm(dim=-1)[trg_valid]
+        if valid_dis.numel() > 0:
+            norm_factor = valid_dis.median()
+        else:
+            norm_factor = torch.tensor(1.0, device=trg_xyz.device, dtype=trg_xyz.dtype)
+        norm_factor = norm_factor.clip(min=0.01, max=100.0)
+        src_norm.append(torch.clamp(src_xyz / norm_factor * target_median, min=-1000.0, max=1000.0))
+        trg_norm.append(torch.clamp(trg_xyz / norm_factor * target_median, min=-1000.0, max=1000.0))
+    return torch.stack(src_norm, dim=0), torch.stack(trg_norm, dim=0)
+
+
 def get_targets(
     batch: list[dict[str, Any]],
     query_source: str,
@@ -557,6 +610,9 @@ def get_targets(
         targets = batch["target_points"]
         if max_points is not None and targets.shape[1] > max_points:
             targets = targets[:, :max_points]
+        if norm_mode and norm_mode != "none":
+            valid = torch.ones(targets.shape[:2], dtype=torch.bool, device=targets.device)
+            targets, _ = normalize_targets_like_nova(targets, valid, targets, valid, mode=norm_mode)
         return targets
     from nova3r.inference import get_all_pts3d, normalize_input
 
