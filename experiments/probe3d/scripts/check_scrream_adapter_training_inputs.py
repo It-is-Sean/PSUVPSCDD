@@ -66,6 +66,29 @@ def main() -> None:
         device = resolve_device("cpu")
         _decoder, decoder_meta, _cfg = build_decoder(device, args.nova_ckpt)
 
+    consistency_keys = [
+        "num_depth_points_after_voxel",
+        "num_mesh_points_after_frustum_crop_pre_mix",
+        "num_mesh_clean_visible",
+        "num_mesh_uncertain_visible",
+        "num_mesh_invisible_complete",
+        "num_mesh_conflict",
+        "sampled_visible_clean",
+        "sampled_invisible_complete",
+        "sampled_uncertain_visible",
+        "sampled_fallback",
+    ]
+    consistency_summary = {}
+    for key in consistency_keys:
+        values = [item.get(key) for item in metadata if item.get(key) is not None]
+        if values:
+            tensor = torch.tensor(values, dtype=torch.float32)
+            consistency_summary[key] = {
+                "mean": float(tensor.mean().item()),
+                "min": float(tensor.min().item()),
+                "max": float(tensor.max().item()),
+            }
+
     summary = {
         "adapter_data": str(adapter_path),
         "num_samples": int(targets.shape[0]),
@@ -79,7 +102,11 @@ def main() -> None:
             "frame_ids": first_meta.get("frame_ids"),
             "target_source": first_meta.get("target_source"),
             "num_points_after_frustum_crop": first_meta.get("num_points_after_frustum_crop"),
+            "num_mesh_clean_visible": first_meta.get("num_mesh_clean_visible"),
+            "num_mesh_invisible_complete": first_meta.get("num_mesh_invisible_complete"),
+            "num_mesh_conflict": first_meta.get("num_mesh_conflict"),
         },
+        "consistency_summary": consistency_summary,
         "target_raw_bounds": {
             "min": targets.amin(dim=(0, 1)).tolist(),
             "max": targets.amax(dim=(0, 1)).tolist(),

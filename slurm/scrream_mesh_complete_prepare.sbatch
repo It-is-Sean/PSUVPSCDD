@@ -20,12 +20,13 @@ export ALL_PROXY="${ALL_PROXY:-http://127.0.0.1:7896}"
 
 read -r -a EXTRA_ARGS <<< "${SCRREAM_EXTRA_ARGS:-}"
 OUTPUT_PATH="${SCRREAM_ADAPTER_OUT:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt}"
+TARGET_SOURCE="${SCRREAM_TARGET_SOURCE:-mesh_complete}"
 
 python experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py \
   --data_root "${SCRREAM_ROOT:-$HOME/datasets/SCRREAM}" \
   --pair_list "${SCRREAM_PAIR_LIST:-data/scrream/scrream_n2_list.json}" \
   --output_path "$OUTPUT_PATH" \
-  --target_source mesh_complete \
+  --target_source "$TARGET_SOURCE" \
   --target_points "${SCRREAM_TARGET_POINTS:-10000}" \
   --mesh_sample_points "${SCRREAM_MESH_SAMPLE_POINTS:-250000}" \
   --split_seed "${SCRREAM_SPLIT_SEED:-17}" \

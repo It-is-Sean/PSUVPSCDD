@@ -54,13 +54,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target_source",
         default="depth_gt_dense",
-        choices=("depth_gt_dense", "mesh_complete"),
-        help="Use dense depth_gt aggregation or registered scene meshes as complete target source.",
+        choices=("depth_gt_dense", "mesh_complete", "official_depth_mix"),
+        help="Use dense depth_gt aggregation, registered scene meshes, or depth-visible/mesh-complete mixed targets.",
     )
     parser.add_argument("--depth_scale", type=float, default=1000.0)
     parser.add_argument("--voxel_size", type=float, default=0.01)
     parser.add_argument("--dense_stride", type=int, default=5)
     parser.add_argument("--dense_context", type=int, default=0)
+    parser.add_argument("--depth_consistency_near_thresh", type=float, default=0.02)
+    parser.add_argument("--depth_consistency_far_thresh", type=float, default=0.10)
+    parser.add_argument("--visible_clean_ratio", type=float, default=0.70)
+    parser.add_argument("--invisible_complete_ratio", type=float, default=0.25)
+    parser.add_argument("--uncertain_ratio", type=float, default=0.05)
     parser.add_argument("--split_seed", type=int, default=17)
     parser.add_argument("--train_ratio", type=float, default=0.8)
     parser.add_argument("--val_ratio", type=float, default=0.1)
@@ -293,6 +298,144 @@ def load_depth_points_world(
     c2w = load_pose_c2w(pose_path, pose_convention=pose_convention)
     points_world = transform_points(points_cam, c2w)
     return voxel_grid_filter(points_world, voxel_size=voxel_size)
+
+
+def load_depth_map(sequence_dir: Path, frame_id: int, depth_scale: float) -> np.ndarray:
+    depth_path = frame_path(sequence_dir, "depth_gt", frame_id, ".png")
+    if not depth_path.is_file():
+        raise FileNotFoundError(depth_path)
+    depth = np.asarray(Image.open(depth_path), dtype=np.float32) / float(depth_scale)
+    if depth.ndim != 2:
+        raise ValueError(f"Expected single-channel depth in {depth_path}, got shape {depth.shape}")
+    depth[~np.isfinite(depth)] = 0.0
+    return depth
+
+
+def mesh_depth_consistency_masks(
+    points_world: np.ndarray,
+    sequence_dir: Path,
+    frame_ids: list[int],
+    intrinsics: CameraIntrinsics,
+    depth_scale: float,
+    pose_convention: str,
+    near_thresh: float,
+    far_thresh: float,
+) -> dict[str, np.ndarray]:
+    count = points_world.shape[0]
+    if count == 0:
+        empty = np.zeros((0,), dtype=bool)
+        return {"clean_visible": empty, "uncertain_visible": empty, "invisible_complete": empty, "conflict": empty}
+
+    visible_support = np.zeros(count, dtype=np.int16)
+    min_abs = np.full(count, np.inf, dtype=np.float32)
+    max_signed = np.full(count, -np.inf, dtype=np.float32)
+
+    for frame_id in frame_ids:
+        depth = load_depth_map(sequence_dir, frame_id, depth_scale=depth_scale)
+        pose = load_pose_c2w(frame_path(sequence_dir, "camera_pose", frame_id, ".txt"), pose_convention=pose_convention)
+        points_cam = transform_points(points_world, np.linalg.inv(pose))
+        z = points_cam[:, 2]
+        positive = z > 1e-6
+        safe_z = np.maximum(z, 1e-6)
+        u_float = intrinsics.fx * points_cam[:, 0] / safe_z + intrinsics.cx
+        v_float = intrinsics.fy * points_cam[:, 1] / safe_z + intrinsics.cy
+        u = np.rint(u_float).astype(np.int64)
+        v = np.rint(v_float).astype(np.int64)
+        inside = positive & (u >= 0) & (u < intrinsics.width) & (v >= 0) & (v < intrinsics.height)
+        if not np.any(inside):
+            continue
+
+        depth_values = np.zeros(count, dtype=np.float32)
+        depth_values[inside] = depth[v[inside], u[inside]]
+        supported = inside & np.isfinite(depth_values) & (depth_values > 0)
+        if not np.any(supported):
+            continue
+
+        signed = z.astype(np.float32) - depth_values
+        abs_residual = np.abs(signed)
+        visible_support[supported] += 1
+        min_abs[supported] = np.minimum(min_abs[supported], abs_residual[supported])
+        max_signed[supported] = np.maximum(max_signed[supported], signed[supported])
+
+    has_support = visible_support > 0
+    clean = has_support & (min_abs <= float(near_thresh))
+    uncertain = has_support & ~clean & (min_abs <= float(far_thresh))
+    conflict = has_support & ~clean & ~uncertain & (max_signed > float(far_thresh))
+    invisible = ~has_support
+    return {
+        "clean_visible": clean,
+        "uncertain_visible": uncertain,
+        "invisible_complete": invisible,
+        "conflict": conflict,
+    }
+
+
+def random_sample_pool(points: np.ndarray, count: int, rng: np.random.Generator) -> np.ndarray:
+    if count <= 0 or points.shape[0] == 0:
+        return np.empty((0, 3), dtype=np.float32)
+    replace = points.shape[0] < count
+    indices = rng.choice(points.shape[0], size=count, replace=replace)
+    return points[indices].astype(np.float32, copy=False)
+
+
+def build_official_depth_mix_points(
+    visible_points_world: np.ndarray,
+    mesh_points_world: np.ndarray,
+    masks: dict[str, np.ndarray],
+    target_pool_size: int,
+    visible_ratio: float,
+    invisible_ratio: float,
+    uncertain_ratio: float,
+    seed: int,
+) -> tuple[np.ndarray, dict[str, int]]:
+    rng = np.random.default_rng(seed)
+    target_pool_size = max(1, int(target_pool_size))
+    ratios = np.asarray([visible_ratio, invisible_ratio, uncertain_ratio], dtype=np.float64)
+    if not np.isfinite(ratios).all() or ratios.sum() <= 0:
+        ratios = np.asarray([0.70, 0.25, 0.05], dtype=np.float64)
+    ratios = np.clip(ratios, 0.0, None)
+    ratios = ratios / ratios.sum()
+
+    visible_count = int(round(target_pool_size * ratios[0]))
+    invisible_count = int(round(target_pool_size * ratios[1]))
+    uncertain_count = max(0, target_pool_size - visible_count - invisible_count)
+
+    invisible_pool = mesh_points_world[masks["invisible_complete"]]
+    uncertain_pool = mesh_points_world[masks["uncertain_visible"]]
+    clean_mesh_pool = mesh_points_world[masks["clean_visible"]]
+    fallback_parts = [visible_points_world, clean_mesh_pool, invisible_pool, uncertain_pool]
+    fallback_pool = (
+        np.concatenate([part for part in fallback_parts if part.size > 0], axis=0)
+        if any(part.size > 0 for part in fallback_parts)
+        else mesh_points_world
+    )
+
+    chunks = [
+        random_sample_pool(visible_points_world, visible_count, rng),
+        random_sample_pool(invisible_pool, invisible_count, rng),
+        random_sample_pool(uncertain_pool, uncertain_count, rng),
+    ]
+    mixed = (
+        np.concatenate([chunk for chunk in chunks if chunk.size > 0], axis=0)
+        if any(chunk.size > 0 for chunk in chunks)
+        else np.empty((0, 3), dtype=np.float32)
+    )
+    fallback_count = 0
+    if mixed.shape[0] < target_pool_size:
+        fallback_count = target_pool_size - mixed.shape[0]
+        fill = random_sample_pool(fallback_pool, fallback_count, rng)
+        mixed = np.concatenate([mixed, fill], axis=0) if mixed.size > 0 else fill
+    if mixed.shape[0] > target_pool_size:
+        choice = rng.choice(mixed.shape[0], size=target_pool_size, replace=False)
+        mixed = mixed[choice]
+
+    stats = {
+        "sampled_visible_clean": int(chunks[0].shape[0]),
+        "sampled_invisible_complete": int(chunks[1].shape[0]),
+        "sampled_uncertain_visible": int(chunks[2].shape[0]),
+        "sampled_fallback": int(fallback_count),
+    }
+    return mixed.astype(np.float32, copy=False), stats
 
 
 def require_trimesh():
@@ -542,7 +685,8 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
     mesh_files: list[str] = []
     points_after_source = 0
     scene_dir = sequence_dir.parent
-    if args.target_source == "depth_gt_dense":
+    consistency_summary: dict[str, Any] = {}
+    if args.target_source in {"depth_gt_dense", "official_depth_mix"}:
         dense_ids = dense_frame_ids(
             sample.frame_ids,
             sequence_dir=sequence_dir,
@@ -566,32 +710,87 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
         nonempty_points = [points for points in per_frame_points if points.size > 0]
         if not nonempty_points:
             raise ValueError(f"No valid depth_gt points found in dense frames for {sample.sample_id}")
-        points_world = np.concatenate(nonempty_points, axis=0)
-        points_world = voxel_grid_filter(points_world, voxel_size=args.voxel_size)
+        depth_points_world = voxel_grid_filter(np.concatenate(nonempty_points, axis=0), voxel_size=args.voxel_size)
+    else:
+        depth_points_world = np.empty((0, 3), dtype=np.float32)
+
+    if args.target_source == "depth_gt_dense":
+        points_world = depth_points_world
         points_after_source = int(points_world.shape[0])
         target_source_label = "scrream_depth_gt_dense"
-    elif args.target_source == "mesh_complete":
+    elif args.target_source in {"mesh_complete", "official_depth_mix"}:
         if mesh_cache_dir is None:
             raise ValueError("mesh_cache_dir must be provided for mesh_complete target generation")
         scene_seed = stable_seed(f"{scene_dir.name}/mesh_complete", args.split_seed)
-        points_world, mesh_files = load_or_build_mesh_points_world(
+        mesh_points_world, mesh_files = load_or_build_mesh_points_world(
             scene_dir=scene_dir,
             cache_dir=mesh_cache_dir,
             sample_count=args.mesh_sample_points,
             voxel_size=args.voxel_size,
             seed=scene_seed,
         )
-        points_after_source = int(points_world.shape[0])
-        target_source_label = "scrream_registered_mesh_complete"
+        points_after_source = int(mesh_points_world.shape[0])
+        if args.target_source == "mesh_complete":
+            points_world = mesh_points_world
+            target_source_label = "scrream_registered_mesh_complete"
+        else:
+            mesh_points_world = crop_to_input_frustums(
+                mesh_points_world,
+                input_poses_c2w=input_poses,
+                intrinsics=intrinsics,
+                margin=args.frustum_margin,
+            )
+            depth_points_world = crop_to_input_frustums(
+                depth_points_world,
+                input_poses_c2w=input_poses,
+                intrinsics=intrinsics,
+                margin=args.frustum_margin,
+            )
+            masks = mesh_depth_consistency_masks(
+                mesh_points_world,
+                sequence_dir=sequence_dir,
+                frame_ids=dense_ids,
+                intrinsics=intrinsics,
+                depth_scale=args.depth_scale,
+                pose_convention=args.pose_convention,
+                near_thresh=args.depth_consistency_near_thresh,
+                far_thresh=args.depth_consistency_far_thresh,
+            )
+            points_world, mix_stats = build_official_depth_mix_points(
+                depth_points_world,
+                mesh_points_world,
+                masks,
+                target_pool_size=max(args.fps_pool_size, args.target_points),
+                visible_ratio=args.visible_clean_ratio,
+                invisible_ratio=args.invisible_complete_ratio,
+                uncertain_ratio=args.uncertain_ratio,
+                seed=stable_seed(f"{sample.sample_id}/official_depth_mix", args.split_seed),
+            )
+            consistency_summary = {
+                "depth_consistency_near_thresh": float(args.depth_consistency_near_thresh),
+                "depth_consistency_far_thresh": float(args.depth_consistency_far_thresh),
+                "visible_clean_ratio": float(args.visible_clean_ratio),
+                "invisible_complete_ratio": float(args.invisible_complete_ratio),
+                "uncertain_ratio": float(args.uncertain_ratio),
+                "num_depth_points_after_voxel": int(depth_points_world.shape[0]),
+                "num_mesh_points_after_frustum_crop_pre_mix": int(mesh_points_world.shape[0]),
+                "num_mesh_clean_visible": int(masks["clean_visible"].sum()),
+                "num_mesh_uncertain_visible": int(masks["uncertain_visible"].sum()),
+                "num_mesh_invisible_complete": int(masks["invisible_complete"].sum()),
+                "num_mesh_conflict": int(masks["conflict"].sum()),
+                **mix_stats,
+            }
+            target_source_label = "scrream_official_depth_mix"
     else:
         raise ValueError(f"Unsupported target_source={args.target_source!r}")
 
-    points_world = crop_to_input_frustums(
-        points_world,
-        input_poses_c2w=input_poses,
-        intrinsics=intrinsics,
-        margin=args.frustum_margin,
-    )
+    if args.target_source != "official_depth_mix":
+        points_world = crop_to_input_frustums(
+            points_world,
+            input_poses_c2w=input_poses,
+            intrinsics=intrinsics,
+            margin=args.frustum_margin,
+        )
     if points_world.shape[0] < args.min_points_after_crop:
         raise ValueError(
             f"Only {points_world.shape[0]} points remain after frustum crop for {sample.sample_id}; "
@@ -637,11 +836,12 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
             "cy": intrinsics.cy,
         },
         "num_points_after_source_voxel": points_after_source,
-        "num_dense_points_after_voxel": points_after_source if args.target_source == "depth_gt_dense" else 0,
-        "num_mesh_points_after_voxel": points_after_source if args.target_source == "mesh_complete" else 0,
+        "num_dense_points_after_voxel": int(depth_points_world.shape[0]) if args.target_source in {"depth_gt_dense", "official_depth_mix"} else 0,
+        "num_mesh_points_after_voxel": points_after_source if args.target_source in {"mesh_complete", "official_depth_mix"} else 0,
         "num_points_after_frustum_crop": int(points_world.shape[0]),
         "target_seed": int(target_seed),
     }
+    metadata.update(consistency_summary)
     return sampled, metadata
 
 
@@ -732,6 +932,11 @@ def main() -> None:
             "mesh_cache_dir": str(mesh_cache_dir),
             "dense_stride": int(args.dense_stride),
             "dense_context": int(args.dense_context),
+            "depth_consistency_near_thresh": float(args.depth_consistency_near_thresh),
+            "depth_consistency_far_thresh": float(args.depth_consistency_far_thresh),
+            "visible_clean_ratio": float(args.visible_clean_ratio),
+            "invisible_complete_ratio": float(args.invisible_complete_ratio),
+            "uncertain_ratio": float(args.uncertain_ratio),
             "split_seed": int(args.split_seed),
             "scene_splits": scene_splits,
             "pose_convention": args.pose_convention,
