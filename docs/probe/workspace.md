@@ -28,12 +28,23 @@ This is the cleaner research layer for running the shared complete-3D decoding a
 
 This contains the more concrete and fast-moving probe experiments, especially the VGGT/NOVA adapter work.
 
-## Vendored dependencies
+## Third-party dependencies
 
 ### VGGT
 - `third_party/vggt/`
 
-Used by both the structured probe path and `experiments/probe3d/`.
+Submodule for `facebookresearch/vggt`, used by both the structured probe path and `experiments/probe3d/`.
+
+### Wan2.1
+- `third_party/Wan2.1/`
+
+Submodule for `Wan-Video/Wan2.1`. Its dependencies are not merged into the root `requirements.txt` or `environment.yml`; prepare a separate environment from `third_party/Wan2.1/requirements.txt` before running Wan-specific code.
+
+After a fresh clone, initialize third-party submodules with:
+
+```bash
+git submodule update --init --recursive
+```
 
 ### DUSt3R dataset loaders
 - `dust3r/datasets/`
