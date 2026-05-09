@@ -12,7 +12,7 @@ from vggt_nova_adapter_common import (
     build_decoder,
     build_loader,
     chamfer_l2,
-    extract_vggt_features,
+    extract_vggt_feature_for_layer,
     get_targets,
     images_from_batch,
     load_vggt,
@@ -21,7 +21,6 @@ from vggt_nova_adapter_common import (
     sample_decoder,
     save_json,
     scene_ids_from_batch,
-    select_vggt_layer23,
     set_seed,
     write_point_cloud_ply,
 )
@@ -42,6 +41,7 @@ def parse_args():
     parser.add_argument("--data_root", default=None, help="Dataset root for --dataset scannet; default /data1/jcd_data/scannet_processed_large")
     parser.add_argument("--num_views", type=int, default=4)
     parser.add_argument("--num_queries", type=int, default=4096)
+    parser.add_argument("--vggt_layer", type=int, default=None, help="Override checkpoint VGGT layer; default uses ckpt config.")
     return parser.parse_args()
 
 
@@ -61,6 +61,7 @@ def main():
 
     ckpt = torch.load(args.ckpt, map_location="cpu")
     config = ckpt["config"]
+    vggt_layer = int(config.get("vggt_layer", 23) if args.vggt_layer is None else args.vggt_layer)
     decoder, meta, cfg = build_decoder(device, args.nova_ckpt)
     loader, _ = build_loader(cfg, args.batch_size, args.num_workers, test=True, dataset_name=args.dataset, data_root=args.data_root, seed=args.seed, num_views=args.num_views)
     vggt = load_vggt(device)
@@ -82,8 +83,12 @@ def main():
                 break
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
-            features, _ = extract_vggt_features(vggt, images, amp=args.amp)
-            selected, selected_idx, reason = select_vggt_layer23(features)
+            selected, selected_idx, reason, _ = extract_vggt_feature_for_layer(
+                vggt,
+                images,
+                human_layer=vggt_layer,
+                amp=args.amp,
+            )
             tokens = adapter(selected)
             pred = sample_decoder(decoder, tokens, args.num_queries, meta["fm_step_size"], args.seed + batch_idx, images.shape[1])
             target = get_targets(batch, meta["query_source"], max_points=args.num_queries)
@@ -100,6 +105,7 @@ def main():
                     "pred_ply": str(output_dir / f"{scene_id}_pred.ply"),
                     "gt_ply": str(output_dir / f"{scene_id}_pseudo_gt.ply"),
                     "selected_vggt_feature_index": selected_idx,
+                    "vggt_layer": vggt_layer,
                     "selection_reason": reason,
                 }
             )

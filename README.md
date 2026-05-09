@@ -1,12 +1,13 @@
 # PSUVPSC3DD / Probe Workspace
 
-## Current canonical status — 2026-05-03
+## Current canonical status — 2026-05-07
 
 This branch is now a **server-side research workspace**. The source of truth is:
 
 - `PROPOSAL.md`
 - `PROJECT.md`
 - `experiments/probe3d/README.md`
+- `docs/probe/handoff_2026-05-07.md`
 - `docs/probe/handoff_2026-05-03.md`
 - `docs/probe/experiment_plan.md`
 
@@ -17,11 +18,11 @@ Important corrections that override older sections below:
 3. **Current MLP baseline:** K2/interval=1 `anchor_frustum + MLP-L4 + chamfer_sample` is recall-heavy but precision/outlier-poor on fixed-30 robust eval: F@0.05 mean/median `0.291/0.275`, precision@0.05 mean `0.204`, recall@0.05 mean `0.532`.
 4. **Latest structured-adapter check:** K2/interval=1 `anchor_frustum + cross_attention L2/H512 + chamfer_sample` completed 1000 steps with validation CD `0.54222615`, which is not better than the MLP baseline by scalar validation CD. Its fixed-30 robust eval should be inspected before any claim if result artifacts are available.
 5. **SCRREAM full-data status:** the old `eval_scrream` package is still invalid for claims, but the full SCRREAM tree is now available locally at `~/datasets/SCRREAM`.
-6. **Current SCRREAM GT path:** the active data bridge uses registered scene meshes (`sceneXX/meshes/*.obj`) as the complete target source, samples mesh surfaces proportional to surface area, crops to the selected two-view union frustum, transforms targets into the first input camera frame, and exports fixed `10000 x 3` adapter targets.
+6. **Current SCRREAM GT path:** the active data bridge uses registered scene meshes (`sceneXX/meshes/*.obj`) as the complete target source, samples mesh surfaces proportional to surface area, crops to the selected two-view union frustum, transforms targets into the first input camera frame, and exports fixed-size adapter targets.
 7. **Slurm convention:** long data generation and training jobs should be launched through scripts in `slurm/`, with logs in `slurm_out/`.
-8. **Current Slurm status:** on 2026-05-03 02:26 CST, full SCRREAM mesh-complete prep job `85773` was running and dependent MLP training job `85774` was pending; the full adapter `.pt` had not yet been written.
+8. **Current Slurm status:** on 2026-05-07 22:42 CST, job `86140` had completed the 20k/500k SCRREAM mesh-complete MLP baseline on `air-node-02` with `1 x A100`; see `docs/probe/handoff_2026-05-07.md`.
 9. **Local weights:** NOVA3R `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; Slurm scripts default network proxy variables to `http://127.0.0.1:7896`.
-10. **Git handoff:** the local cleanup branch is `wip/psuvpsc3dd-probe-20260429`; push it before using it for a fresh remote checkout.
+10. **Third-party source:** VGGT and Wan2.1 are Git submodules under `third_party/`; run `git submodule update --init --recursive` after a fresh clone. Wan2.1 dependencies stay separate from the root env.
 
 This repository is currently a **research execution workspace** around a simple question:
 
@@ -62,13 +63,24 @@ The current target source is **mesh-complete**, not the earlier eval-subset pseu
 - the output `.pt` is consumed through `--dataset scrream_adapter --data_root <adapter.pt>`
 - for `nova_flow`, SCRREAM targets are normalized with the NOVA `scene_ae` checkpoint `norm_mode`; the local `scene_ae` config reports `median_3`
 
-Current job state recorded on 2026-05-03 02:26 CST:
+Current data / job state recorded on 2026-05-07 22:42 CST:
 
-- `85773` / `scrream_mesh_prep`: `RUNNING` on `air-node-04`
-- `85774` / `scrream_mesh_mlp`: `PENDING (Dependency)` after `85773`
-- target full adapter data was not yet written:
+- 10k original adapter data exists:
   - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt`
-  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.manifest.json`
+  - shape `[329, 10000, 3]`, split `train=223`, `val=12`, `test=94`
+- 10k trainplus-test data exists:
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_trainplus_test.pt`
+  - split `train=317`, `val=12`
+- 20k / 500k data exists:
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000.pt`
+  - shape `[329, 20000, 3]`, split `train=223`, `val=12`, `test=94`
+- current formal training input exists:
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+  - shape `[329, 20000, 3]`, split `train=317`, `val=12`
+- `86140` / `scrream_mesh_mlp`: `COMPLETED` on `air-node-02`
+  - output: `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17`
+  - SwanLab: `https://swanlab.cn/@JiachengDong/PSUVPSC3DD/runs/eoiupi3bv2g11dvd21ypm`
+  - final metrics: first loss `1.4599288702011108`, final loss `0.8398033976554871`, best train loss `0.5998285412788391`, best validation Chamfer-L2 `0.5149603486061096`
 
 ### 2. ScanNet v2 line
 
@@ -88,7 +100,7 @@ The training structure remains aligned with the proposal direction:
 
 ### 3. InteriorGS line
 
-InteriorGS remains a plausible future data-quality migration path, but it is no longer the immediate next step. The current priority is to finish the SCRREAM full mesh-complete data generation and first MLP adapter baseline first.
+InteriorGS remains a plausible future data-quality migration path, but it is no longer the immediate next step. The current priority is to inspect the completed SCRREAM full mesh-complete 20k / 500k MLP baseline before choosing the next data-quality migration or adapter branch.
 
 ## Active ScanNet v2 mesh-first plan
 
@@ -161,18 +173,18 @@ After user review, the active plan is to align the ScanNet target/loss more clos
 The practical near-term plan is:
 
 1. keep the old `eval_scrream` correction in mind and do not reuse those invalid claims
-2. monitor Slurm prep job `85773` until the full SCRREAM mesh-complete adapter `.pt` and manifest exist
-3. let dependent Slurm job `85774` start the first SCRREAM MLP adapter baseline only if prep succeeds
-4. inspect losses, validation samples, and exported PLYs before making any adapter claim
-5. keep the fixed-30 ScanNet metrics as a failure-mode baseline
-6. defer InteriorGS until the corrected SCRREAM full-data baseline is understood
+2. inspect job `86140` losses, validation samples, and exported PLYs before making any adapter claim
+3. use multi-GPU Slurm launches for follow-up runs via `SCRREAM_GPUS_PER_NODE` and `SCRREAM_EPOCHS`
+4. keep the fixed-30 ScanNet metrics as a failure-mode baseline
+5. defer InteriorGS until the corrected SCRREAM full-data baseline is understood
 
 ## Documentation map
 
 - `AGENTS.md` — project-level instructions for future coding agents
 - `PROJECT.md` — current project-level status and next steps
 - `docs/probe/README.md` — probe-doc entry point
-- `docs/probe/handoff_2026-05-03.md` — current machine handoff for SCRREAM mesh-complete
+- `docs/probe/handoff_2026-05-07.md` — current SCRREAM data / Slurm / submodule handoff
+- `docs/probe/handoff_2026-05-03.md` — historical machine handoff for the first SCRREAM mesh-complete prep chain
 - `docs/probe/scannet_mesh_first_plan.md` — current ScanNet formal plan
 - `docs/probe/experiment_history.md` — what really happened, including corrections
 - `docs/probe/experiment_plan.md` — phased execution plan from here

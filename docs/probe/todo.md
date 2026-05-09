@@ -1,6 +1,6 @@
 # TODO
 
-## Active now — 2026-05-03
+## Active now — 2026-05-09
 
 ### SCRREAM full mesh-complete adapter line
 - [x] download full SCRREAM to `~/datasets/SCRREAM`
@@ -20,10 +20,25 @@
 - [x] validate SCRREAM training-input precheck against the preview `.pt` and `scene_ae` checkpoint
 - [x] submit full adapter data generation as Slurm job `85773`
 - [x] submit first MLP baseline as dependent Slurm job `85774`
-- [ ] monitor job `85773` until `scrream_mesh_complete_n2_adapter_seed17.pt` and manifest are written
-- [ ] verify generated `.pt` tensor shape, metadata, manifest, and sample RGB paths
-- [ ] monitor dependent MLP baseline job `85774` after prep succeeds
-- [ ] inspect validation losses, PLY outputs, and representative samples before making any SCRREAM claim
+- [x] generate `scrream_mesh_complete_n2_adapter_seed17.pt` with shape `[329, 10000, 3]`
+- [x] generate `scrream_mesh_complete_n2_adapter_seed17_trainplus_test.pt` with split `train=317`, `val=12`
+- [x] generate `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000.pt` with shape `[329, 20000, 3]`
+- [x] generate `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt` with split `train=317`, `val=12`
+- [x] add `slurm/scrream_merge_test_into_train.sbatch`
+- [x] initialize the VGGT submodule after submodule conversion
+- [x] launch 20k / 500k trainplus-test MLP baseline as Slurm job `86140`
+- [x] verify job `86140` loads VGGT weights, starts SwanLab, writes checkpoints, and reaches validation at step `3000`
+- [x] add multi-GPU DDP launch support to `slurm/scrream_mesh_complete_mlp_train.sbatch`
+- [x] confirm job `86140` completed successfully with exit `0:0`
+- [x] record job `86140` final metrics in the handoff docs
+- [x] implement robust validation metrics and `val_visual_40960/` exports
+- [x] run packed VGGT layer ablation as Slurm job `86149`
+- [x] confirm job `86149` completed successfully with exit `0:0`
+- [x] identify VGGT layer `20` as the current default probe layer
+- [x] record robust layer-ablation results in the handoff docs
+- [ ] inspect layer `16` vs layer `20` visual PLYs before making a qualitative SCRREAM claim
+- [ ] expand SCRREAM training data scale beyond the current 329 official pairs
+- [ ] test more adapter/model variants after the layer-20 baseline is established
 
 ### Current execution convention
 - [x] use conda env `nova3r`
@@ -31,6 +46,11 @@
 - [x] keep Slurm scripts under `slurm/`
 - [x] keep Slurm logs under `slurm_out/`
 - [x] use SwanLab by default for the formal SCRREAM MLP Slurm script unless `SCRREAM_SWANLAB=0`
+- [x] keep SwanLab API key in ignored local `slurm/.secrets.env`
+- [x] use `SCRREAM_GPUS_PER_NODE` + `SCRREAM_EPOCHS` for future multi-GPU Slurm training
+- [x] ignore `scrream_official_depth_mix_*` artifacts unless explicitly running a depth-mix ablation
+- [x] keep robust validation and `val_visual_40960/` enabled for formal runs
+- [x] add project-level VSCode exclusions so large result/cache/checkpoint directories remain visible but are not watched/searched/indexed
 
 ## Deferred after SCRREAM baseline
 

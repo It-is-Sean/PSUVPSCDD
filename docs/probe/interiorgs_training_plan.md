@@ -1,9 +1,11 @@
 # InteriorGS training migration plan
 
-Status as of 2026-05-03: deferred. This was the next planned data direction
-after the 2026-04-29 ScanNet diagnosis, but the immediate branch has moved to
-full SCRREAM mesh-complete adapter training because the full SCRREAM tree is now
-available at `~/datasets/SCRREAM`.
+Status as of 2026-05-07: deferred. This was the next planned data direction
+after the 2026-04-29 ScanNet diagnosis, but the immediate branch moved to
+full SCRREAM mesh-complete adapter training because the full SCRREAM tree became
+available at `~/datasets/SCRREAM`. The first 20k / 500k SCRREAM MLP baseline has
+completed, but its metrics and PLY outputs still need to be inspected before
+choosing a new data-quality migration branch.
 
 ## Motivation
 

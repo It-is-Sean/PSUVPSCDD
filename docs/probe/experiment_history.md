@@ -1,5 +1,53 @@
 # Experiment history summary
 
+## 2026-05-07 SCRREAM 20k / 500k adapter run
+
+The SCRREAM mesh-complete line advanced from data-prep handoff to a completed 20k / 500k MLP baseline.
+
+Generated adapter datasets:
+
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt`
+  - shape `[329, 10000, 3]`
+  - split `train=223`, `val=12`, `test=94`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_trainplus_test.pt`
+  - split `train=317`, `val=12`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000.pt`
+  - shape `[329, 20000, 3]`
+  - split `train=223`, `val=12`, `test=94`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+  - split `train=317`, `val=12`
+
+The `trainplus_test` datasets are split-label rewrites: `test` is converted to `train`, and `val` is preserved. They should not be used for held-out test claims.
+
+The completed training job is:
+
+- `86140` / `scrream_mesh_mlp`
+- state: `COMPLETED`, exit `0:0`
+- node: `air-node-02`
+- GPU: `1 x A100`
+- elapsed: `00:26:26`
+- Slurm end time: `2026-05-07 22:40:22 CST`
+- input `.pt`: `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+- output dir: `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17`
+- SwanLab run: `https://swanlab.cn/@JiachengDong/PSUVPSC3DD/runs/eoiupi3bv2g11dvd21ypm`
+- config: `MLP-L4`, hidden `1024`, `nova_flow`, `num_queries=20000`, requested `9510` steps
+
+Final metrics:
+
+- `first_loss=1.4599288702011108`
+- `final_loss=0.8398033976554871`
+- `best_loss=0.5998285412788391`
+- `best_val_chamfer_l2=0.5149603486061096`
+
+The latest `validation_metrics.json` is step `9500` with `val_chamfer_l2=0.6779176592826843`; the best validation value is the one recorded in `final_metrics.json`.
+
+Operational fixes during this run:
+
+- `third_party/vggt` had to be initialized after conversion to a submodule; an empty submodule directory caused `ModuleNotFoundError: No module named 'vggt.models.vggt'`.
+- `slurm/scrream_merge_test_into_train.sbatch` was added to convert `test -> train` safely and run input checks.
+- `slurm/scrream_mesh_complete_mlp_train.sbatch` now supports single-node DDP via `SCRREAM_GPUS_PER_NODE`; future multi-GPU runs should set `SCRREAM_EPOCHS` so step count scales by effective batch size.
+- Local `scrream_official_depth_mix_*` artifacts are treated as historical ablations and are not part of the current training line.
+
 ## 2026-05-03 SCRREAM full-data mesh-complete bridge
 
 The corrected SCRREAM branch is active again because the full dataset is now present at:

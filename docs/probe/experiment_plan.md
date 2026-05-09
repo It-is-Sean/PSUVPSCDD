@@ -1,14 +1,14 @@
 # Experiment plan from the current state
 
-## Current plan override — 2026-05-03
+## Current plan override — 2026-05-07
 
 Older phase labels below remain useful history, but the next valid plan is now:
 
 1. **Use full SCRREAM, not `eval_scrream`.** The old local SCRREAM subset remains invalid for claims. The corrected branch uses `~/datasets/SCRREAM`.
 2. **Use mesh-complete SCRREAM targets first.** The current default GT source is registered scene meshes sampled proportional to surface area, cropped to the selected two-view union frustum, and stored in the first input camera frame.
 3. **Launch through Slurm.** Data generation and training scripts live in `slurm/`; logs go to `slurm_out/`.
-4. **Generate before training.** The full adapter `.pt` generation job `85773` was running at 2026-05-03 02:26 CST, with dependent MLP training job `85774` pending. Verify shape / metadata / previews before interpreting training.
-5. **Train the MLP baseline before method sprawl.** First baseline is `adapter_type=mlp`, `adapter_layers=4`, `adapter_hidden_dim=1024`, `loss_type=nova_flow`, `num_queries=10000`.
+4. **Current formal run.** The 20k / 500k `trainplus_test` adapter data is generated, and job `86140` completed the MLP baseline on `air-node-02` with exit `0:0`.
+5. **Train the MLP baseline before method sprawl.** Current baseline is `adapter_type=mlp`, `adapter_layers=4`, `adapter_hidden_dim=1024`, `loss_type=nova_flow`, `num_queries=20000`.
 6. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
 7. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
 
@@ -98,7 +98,7 @@ After the paper-aligned native-flow MLP baseline is meaningful:
 
 ## Phase 5 — InteriorGS high-quality data pilot
 
-InteriorGS-style high-quality indoor 3DGS data is deferred until after the corrected SCRREAM full-data baseline is generated, trained, and inspected.
+InteriorGS-style high-quality indoor 3DGS data is deferred until after the completed corrected SCRREAM full-data baseline is inspected and understood.
 
 Immediate steps:
 
@@ -122,7 +122,8 @@ Current status:
 5. Slurm scripts exist for data preparation and MLP adapter training
 6. checkpoints are staged under `checkpoints/` for NOVA `scene_n1`, `scene_n2`, `scene_ae`, and VGGT
 7. SwanLab is installed in `nova3r`, and the full MLP Slurm script enables it by default
-8. job `85773` is preparing the full adapter `.pt`; job `85774` is pending on `85773`
+8. 10k and 20k adapter `.pt` datasets are generated
+9. job `86140` completed the 20k / 500k trainplus-test MLP baseline
 
 GT construction:
 
@@ -132,16 +133,21 @@ GT construction:
 4. voxel-deduplicate and cache a per-scene mesh reservoir
 5. crop points to the union frustum of the two input views
 6. transform the target to the first input camera coordinate frame
-7. FPS sample or pad to `10000` target points
+7. FPS sample or pad to the requested target count
 
-Current Slurm chain:
+Completed baseline:
 
-```bash
-squeue -j 85773,85774 -o '%.18i %.30j %.8T %.10M %.9l %.30R'
-sacct -j 85773,85774 --format=JobID,JobName%30,State,ExitCode,Elapsed,Start,End,NodeList%20
-```
+- job: `86140` / `scrream_mesh_mlp`
+- state: `COMPLETED`, exit `0:0`
+- node: `air-node-02`
+- elapsed: `00:26:26`
+- Slurm end time: `2026-05-07 22:40:22 CST`
+- output: `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17`
+- SwanLab: `https://swanlab.cn/@JiachengDong/PSUVPSC3DD/runs/eoiupi3bv2g11dvd21ypm`
+- `final_metrics.json`: `first_loss=1.4599288702011108`, `final_loss=0.8398033976554871`, `best_loss=0.5998285412788391`, `best_val_chamfer_l2=0.5149603486061096`
+- latest `validation_metrics.json`: step `9500`, `val_chamfer_l2=0.6779176592826843`
 
-Do not resubmit the default full prep/train jobs while `85773` / `85774` are still active.
+Inspect `best.pth`, `latest.pth`, and the exported PLYs before making any adapter claim from this run.
 
 Smoke variants can override script defaults through environment variables:
 
@@ -154,6 +160,19 @@ SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_a
 SCRREAM_MAX_STEPS=100 \
 SCRREAM_OUTPUT_DIR=experiments/probe3d/result/scrream_mesh_complete_smoke8_mlp \
 sbatch slurm/scrream_mesh_complete_mlp_train.sbatch
+```
+
+Future follow-up runs should use the multi-GPU Slurm path when idle GPUs are available:
+
+```bash
+SCRREAM_GPUS_PER_NODE=4 \
+SCRREAM_EPOCHS=30 \
+SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt \
+SCRREAM_OUTPUT_DIR=experiments/probe3d/result/<new-run-name> \
+SCRREAM_FEATURE_CACHE_DIR=experiments/probe3d/feature_cache/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_vggt23 \
+SCRREAM_NUM_QUERIES=20000 \
+sbatch --qos=high --nodelist=<node-with-free-a100s> --gres=gpu:a100:4 --mem=96G \
+  slurm/scrream_mesh_complete_mlp_train.sbatch
 ```
 
 ## Phase 7 — Proposal-facing interpretation

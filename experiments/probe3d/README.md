@@ -1,6 +1,6 @@
 # NOVA3R 3D Probe
 
-## Current status override — 2026-05-03
+## Current status override — 2026-05-07
 
 The active probe state has moved to the corrected full SCRREAM branch. Important current constraints:
 
@@ -12,7 +12,8 @@ The active probe state has moved to the corrected full SCRREAM branch. Important
 - use the downloaded full SCRREAM tree at `~/datasets/SCRREAM` for the corrected branch;
 - default SCRREAM full-data target source is now registered mesh-complete, not dense depth aggregation;
 - submit long data-prep and training work through `slurm/`; Slurm logs go to `slurm_out/`.
-- as of 2026-05-03 02:26 CST, full prep job `85773` is running and dependent MLP job `85774` is pending; do not resubmit unless that chain fails or the user asks.
+- job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; inspect its metrics and exported PLYs before making any SCRREAM adapter claim.
+- initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`.
 
 
 Minimal collaborator-side probing experiment for decoding complete 3D geometry from frozen NOVA3R / VGGT features.
@@ -40,7 +41,7 @@ Current target semantics:
 - cache: per-scene mesh reservoirs under `experiments/probe3d/adapter_data/mesh_cache/`
 - frustum crop: keep mesh points visible in at least one selected input view with positive depth
 - target frame: first input camera coordinates
-- final target: deterministic FPS to `10000` points, with replacement padding only when the crop is undersized
+- final target: deterministic FPS to the requested target count, with replacement padding only when the crop is undersized
 - output schema: `scene_ids`, `target_points`, `splits`, `metadata`, and global `meta`
 
 The earlier equal-points-per-OBJ preview under `scrream_mesh_complete_n2_preview/` underweighted room-scale surfaces. The accepted current preview uses area-proportional sampling and lives under:
@@ -78,6 +79,22 @@ Full adapter dataset after the smoke preview looks correct:
 sbatch slurm/scrream_mesh_complete_prepare.sbatch
 ```
 
+Generated formal datasets now available locally:
+
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt`
+  - shape `[329, 10000, 3]`
+  - split `train=223`, `val=12`, `test=94`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_trainplus_test.pt`
+  - split `train=317`, `val=12`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000.pt`
+  - shape `[329, 20000, 3]`
+  - `mesh_sample_points=500000`
+  - split `train=223`, `val=12`, `test=94`
+- `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+  - split `train=317`, `val=12`
+
+The `trainplus_test` files rewrite split labels only: `test` becomes `train`, and `val` is preserved. They have no held-out test split.
+
 Training smoke after a smoke `.pt` exists:
 
 ```bash
@@ -94,6 +111,46 @@ First full MLP baseline after the full `.pt` exists:
 ```bash
 sbatch slurm/scrream_mesh_complete_mlp_train.sbatch
 ```
+
+Current 20k / 500k trainplus-test run:
+
+```bash
+SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt \
+SCRREAM_OUTPUT_DIR=experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17 \
+SCRREAM_FEATURE_CACHE_DIR=experiments/probe3d/feature_cache/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_vggt23 \
+SCRREAM_SWANLAB=1 \
+SCRREAM_NUM_QUERIES=20000 \
+SCRREAM_MAX_STEPS=9510 \
+SCRREAM_SAVE_EVERY=500 \
+SCRREAM_VAL_EVERY=500 \
+SCRREAM_EVAL_BATCHES=2 \
+sbatch --qos=high --nodelist=air-node-02 --gres=gpu:a100:1 --mem=32G \
+  slurm/scrream_mesh_complete_mlp_train.sbatch
+```
+
+This submitted job `86140`, which completed on `air-node-02` with exit `0:0`, elapsed `00:26:26`, and Slurm end time `2026-05-07 22:40:22 CST`.
+
+Completed run artifacts:
+
+- output: `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17`
+- SwanLab: `https://swanlab.cn/@JiachengDong/PSUVPSC3DD/runs/eoiupi3bv2g11dvd21ypm`
+- `final_metrics.json`: `first_loss=1.4599288702011108`, `final_loss=0.8398033976554871`, `best_loss=0.5998285412788391`, `best_val_chamfer_l2=0.5149603486061096`
+- latest `validation_metrics.json`: step `9500`, `val_chamfer_l2=0.6779176592826843`
+
+Future multi-GPU follow-up runs should use the script's DDP path:
+
+```bash
+SCRREAM_GPUS_PER_NODE=4 \
+SCRREAM_EPOCHS=30 \
+SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt \
+SCRREAM_OUTPUT_DIR=experiments/probe3d/result/<new-run-name> \
+SCRREAM_FEATURE_CACHE_DIR=experiments/probe3d/feature_cache/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_vggt23 \
+SCRREAM_NUM_QUERIES=20000 \
+sbatch --qos=high --nodelist=<node-with-free-a100s> --gres=gpu:a100:4 --mem=96G \
+  slurm/scrream_mesh_complete_mlp_train.sbatch
+```
+
+When `SCRREAM_GPUS_PER_NODE>1`, the Slurm script launches `torchrun --standalone`; with `SCRREAM_EPOCHS` it computes the correct distributed step count from `train_count / (batch_size_per_gpu * gpu_count)`.
 
 If checkpoints are not in the default repo paths, pass them as environment variables:
 
@@ -127,11 +184,13 @@ The Slurm scripts default `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` to `http:
 
 The older `prepare_scrream_adapter_data.py` remains a legacy LDI / pseudo-GT path. It expects `ldi/` and `*_ldi.npz`, so it is not the right entrypoint for the downloaded full SCRREAM tree.
 
-### Optional depth-GT dense bridge
+### Historical depth-GT / depth-mix branches
 
 `prepare_scrream_full_adapter_data.py` still supports `--target_source depth_gt_dense` as an alternate baseline. That mode aggregates `depth_gt` frames between the input pair, voxel-filters duplicates, crops to the input union frustum, and stores targets in the first input camera frame.
 
 Use it only when intentionally comparing depth aggregation against mesh-complete targets. It does not produce truly mesh-complete surfaces; it can include surfaces seen by nearby dense frames that were not visible in the first input, but it cannot recover unobserved mesh backsides except where other depth frames observed them.
+
+Local `scrream_official_depth_mix_*` `.pt` and preview artifacts under `experiments/probe3d/adapter_data/` are historical ablations. They are not part of the current adapter-training line and should be ignored unless the user explicitly asks for a depth-mix ablation.
 
 ## Legacy LDI / pseudo-GT adapter path
 
@@ -236,7 +295,7 @@ The current best short-run ScanNet result is not from the old long formal MLP sc
 - loss: direct sampled rollout Chamfer (`loss_type=chamfer_sample`)
 - best validation CD: `0.08745259`
 
-Interpretation: direct rollout Chamfer fixed the large train/eval objective mismatch seen with `nova_flow`, but the visual point cloud is still loose / thick / outlier-heavy. The next active data experiment is now the SCRREAM full mesh-complete adapter baseline; InteriorGS is deferred until this corrected full-data branch is understood.
+Interpretation: direct rollout Chamfer fixed the large train/eval objective mismatch seen with `nova_flow`, but the visual point cloud is still loose / thick / outlier-heavy. The next active data task is to inspect the completed SCRREAM full mesh-complete adapter baseline; InteriorGS is deferred until this corrected full-data branch is understood.
 ### Paper-aligned NOVA3R reset
 
 After user review, the active plan is to align the ScanNet target/loss more closely with NOVA3R: complete / amodal points inside the selected input-view frustum, FPS-style target sampling through `src_complete_fps_*`, and native flow matching as the primary loss. The new phase-2 config is:

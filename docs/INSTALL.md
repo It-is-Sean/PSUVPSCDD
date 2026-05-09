@@ -31,6 +31,19 @@ make probe-env
 make probe-env-verify
 ```
 
+Initialize third-party submodules after cloning:
+
+```bash
+git submodule update --init --recursive
+```
+
+Current submodules:
+
+- `third_party/vggt` -> `https://github.com/facebookresearch/vggt.git`
+- `third_party/Wan2.1` -> `https://github.com/Wan-Video/Wan2.1.git`
+
+Wan2.1 is source-only for now. Its dependencies are intentionally not merged into the root environment; use `third_party/Wan2.1/requirements.txt` in a separate environment before running Wan-specific code.
+
 The workflow is driven by:
 
 - `environment.yml`
@@ -108,7 +121,7 @@ cd ../../
 bash scripts/download_checkpoints.sh
 ```
 
-Current local research-workspace state on 2026-05-03:
+Current local research-workspace state on 2026-05-07:
 
 - `checkpoints/scene_n1/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml` are present.

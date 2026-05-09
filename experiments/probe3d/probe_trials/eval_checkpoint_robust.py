@@ -32,14 +32,13 @@ from probe.adapter import (  # noqa: E402
 from vggt_nova_adapter_common_raw import (  # noqa: E402
     build_decoder,
     build_loader,
-    extract_vggt_features,
+    extract_vggt_feature_for_layer,
     get_targets,
     images_from_batch,
     load_vggt,
     move_batch_to_device,
     sample_decoder,
     sample_keys_from_batch,
-    select_vggt_layer23,
     set_seed,
     write_point_cloud_ply,
 )
@@ -171,6 +170,7 @@ def main() -> None:
 
     ckpt = torch.load(args.ckpt, map_location="cpu")
     cfg_train = ckpt["config"]
+    vggt_layer = int(cfg_train.get("vggt_layer", 23))
     meta = dict(ckpt.get("meta", ckpt.get("decoder_meta", cfg_train.get("nova_decoder_meta", {}))))
     decoder, decoder_meta, cfg = build_decoder(device, cfg_train.get("nova_ckpt"))
     for key, val in dict(decoder_meta).items():
@@ -213,8 +213,12 @@ def main() -> None:
         images = images_from_batch(batch)
         keys = [list(k) for k in sample_keys_from_batch(batch)]
         with torch.no_grad():
-            features, _ = extract_vggt_features(vggt, images, amp=True)
-            selected, selected_idx, selection_reason = select_vggt_layer23(features)
+            selected, selected_idx, selection_reason, _ = extract_vggt_feature_for_layer(
+                vggt,
+                images,
+                human_layer=vggt_layer,
+                amp=True,
+            )
         if adapter is None:
             adapter_type = str(cfg_train.get("adapter_type", "mlp"))
             adapter = build_adapter(adapter_type, cfg_train, selected.shape[-1], meta).to(device)
@@ -272,6 +276,7 @@ def main() -> None:
         "metric_max_points": args.metric_max_points,
         "data_args": str(data_args),
         "selected_idx": selected_idx,
+        "vggt_layer": vggt_layer,
         "selection_reason": selection_reason,
         "config_subset": {
             k: cfg_train.get(k)

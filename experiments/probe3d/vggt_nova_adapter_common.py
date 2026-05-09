@@ -134,6 +134,59 @@ def extract_vggt_features(vggt, images: torch.Tensor, amp: bool = True) -> tuple
     return list(features), int(patch_start_idx)
 
 
+def extract_vggt_dino_features(vggt, images: torch.Tensor, amp: bool = True) -> tuple[torch.Tensor, int]:
+    """Return VGGT's frozen DINO patch tokens before alternating attention blocks."""
+    if images.ndim == 4:
+        images = images.unsqueeze(1)
+    aggregator = vggt.aggregator
+    if images.ndim != 5:
+        raise ValueError(f"Expected images with shape [B,S,3,H,W], got {tuple(images.shape)}")
+    bsz, num_views, channels, height, width = images.shape
+    if channels != 3:
+        raise ValueError(f"Expected 3 image channels, got {channels}")
+    with torch.no_grad():
+        with amp_context(images.device, amp):
+            normalized = (images - aggregator._resnet_mean) / aggregator._resnet_std
+            patch_tokens = aggregator.patch_embed(normalized.reshape(bsz * num_views, channels, height, width))
+            if isinstance(patch_tokens, dict):
+                patch_tokens = patch_tokens["x_norm_patchtokens"]
+    _, num_patches, dim = patch_tokens.shape
+    return patch_tokens.reshape(bsz, num_views, num_patches, dim), 0
+
+
+def select_vggt_layer(features: list[torch.Tensor], human_layer: int) -> tuple[torch.Tensor, int, str]:
+    if human_layer <= 0:
+        raise ValueError("human_layer <= 0 is reserved for DINO-only features; use extract_vggt_feature_for_layer().")
+    if not features:
+        raise RuntimeError("VGGT aggregator returned no intermediate features.")
+    idx = human_layer - 1
+    if idx >= len(features):
+        raise ValueError(
+            f"Requested VGGT human layer {human_layer}, but aggregator returned only "
+            f"{len(features)} intermediate layers."
+        )
+    reason = (
+        f"VGGT human layer {human_layer} maps to aggregator output index {idx} "
+        f"from {len(features)} returned intermediate layers."
+    )
+    return features[idx], idx, reason
+
+
+def extract_vggt_feature_for_layer(
+    vggt,
+    images: torch.Tensor,
+    human_layer: int = 23,
+    amp: bool = True,
+) -> tuple[torch.Tensor, int, str, int]:
+    if human_layer == 0:
+        selected, patch_start_idx = extract_vggt_dino_features(vggt, images, amp=amp)
+        reason = "VGGT human layer 0 uses DINO patch tokens before VGGT alternating-attention blocks."
+        return selected, 0, reason, patch_start_idx
+    features, patch_start_idx = extract_vggt_features(vggt, images, amp=amp)
+    selected, selected_idx, reason = select_vggt_layer(features, human_layer)
+    return selected, selected_idx, reason, patch_start_idx
+
+
 def select_vggt_layer23(features: list[torch.Tensor]) -> tuple[torch.Tensor, int, str]:
     if len(features) < 1:
         raise ValueError("VGGT returned no intermediate features.")

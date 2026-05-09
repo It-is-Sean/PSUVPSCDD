@@ -26,7 +26,12 @@ Important distinction:
 - The current full SCRREAM training tree used by the adapter work is staged locally at `~/datasets/SCRREAM`.
 - For the full tree, use `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py`; do not use the legacy LDI prep script unless the data explicitly contains `ldi/` and `*_ldi.npz`.
 - The current primary full-SCRREAM target source is `--target_source mesh_complete`, using registered `sceneXX/meshes/*.obj` assets cropped to the selected input-pair frustum.
-- Full mesh-complete adapter generation was submitted as Slurm job `85773` on 2026-05-03. The expected full output is `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt` plus `.manifest.json`; at 2026-05-03 02:26 CST those files were not yet written.
+- Current generated mesh-complete adapter data includes:
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt` with shape `[329, 10000, 3]`
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_trainplus_test.pt` with split `train=317`, `val=12`
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000.pt` with shape `[329, 20000, 3]`
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt` with split `train=317`, `val=12`
+- The `trainplus_test` files have no held-out test split; they are for maximizing training data after the user explicitly asked to merge test pairs into train.
 
 ### Directory structure after download
 

@@ -10,15 +10,13 @@ from vggt_nova_adapter_common import (
     build_decoder,
     build_loader,
     count_parameters,
-    extract_vggt_features,
+    extract_vggt_feature_for_layer,
     get_targets,
     images_from_batch,
     load_vggt,
     move_batch_to_device,
-    print_feature_shapes,
     resolve_device,
     sample_decoder,
-    select_vggt_layer23,
     set_seed,
     trainable_parameter_names,
 )
@@ -38,6 +36,7 @@ def parse_args():
     parser.add_argument("--data_root", default=None, help="Dataset root for --dataset scannet; default /data1/jcd_data/scannet_processed_large")
     parser.add_argument("--num_views", type=int, default=4)
     parser.add_argument("--num_queries", type=int, default=512)
+    parser.add_argument("--vggt_layer", type=int, default=23)
     return parser.parse_args()
 
 
@@ -54,10 +53,14 @@ def main():
     images = images_from_batch(batch)
     print(f"Input images shape: {tuple(images.shape)}")
 
-    features, patch_start_idx = extract_vggt_features(vggt, images, amp=args.amp)
+    selected, selected_idx, reason, patch_start_idx = extract_vggt_feature_for_layer(
+        vggt,
+        images,
+        human_layer=args.vggt_layer,
+        amp=args.amp,
+    )
     print(f"VGGT patch_start_idx: {patch_start_idx}")
-    print_feature_shapes(features)
-    selected, selected_idx, reason = select_vggt_layer23(features)
+    print(f"Requested VGGT human layer: {args.vggt_layer}")
     print(f"Selected VGGT feature index: {selected_idx}")
     print(f"Selection reason: {reason}")
     print(f"Selected VGGT feature shape: {tuple(selected.shape)}")

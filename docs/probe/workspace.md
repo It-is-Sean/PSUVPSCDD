@@ -34,6 +34,7 @@ This contains the more concrete and fast-moving probe experiments, especially th
 - `third_party/vggt/`
 
 Submodule for `facebookresearch/vggt`, used by both the structured probe path and `experiments/probe3d/`.
+Initialize it before adapter training; an empty submodule checkout causes `ModuleNotFoundError: No module named 'vggt.models.vggt'`.
 
 ### Wan2.1
 - `third_party/Wan2.1/`
@@ -68,3 +69,4 @@ These are not vendored into git and should stay local/runtime-provided:
 - If you want a **clean reproducible research interface**, start from `README.md`, `PROJECT.md`, `configs/probe/`, and `scripts/probe/`.
 - If you want the **latest concrete adapter experiments**, go straight to `experiments/probe3d/`.
 - If you need third-party model code, look in `third_party/` before reaching outside the repo.
+- If you need the current SCRREAM run state, read `docs/probe/handoff_2026-05-07.md`.

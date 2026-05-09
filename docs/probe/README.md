@@ -1,10 +1,10 @@
 # Probe Docs
 
-## Current canonical status — 2026-05-03
+## Current canonical status — 2026-05-07
 
 For the latest project state, read:
 
-- `handoff_2026-05-03.md`
+- `handoff_2026-05-07.md`
 - `../../experiments/probe3d/README.md`
 - `experiment_plan.md`
 
@@ -14,11 +14,11 @@ Key corrections:
 - CD-only and two-sample oracle results are not claim-level evidence. Use fixed-sample robust metrics and visual audits.
 - The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
 - The old local `eval_scrream` branch is invalid for claims, but full SCRREAM is now downloaded at `~/datasets/SCRREAM`.
-- The active next branch is SCRREAM full-data mesh-complete adapter training.
+- The active branch is SCRREAM full-data mesh-complete adapter training.
 - Long data generation and training should use `slurm/` scripts with logs in `slurm_out/`.
-- On 2026-05-03 02:26 CST, Slurm job `85773` was running full mesh-complete adapter prep and dependent job `85774` was pending for the first MLP baseline.
+- Slurm job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; `final_metrics.json` reports `best_val_chamfer_l2=0.5149603486061096`.
 - NOVA `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; SwanLab is installed in `nova3r`.
-- The local cleanup branch is `wip/psuvpsc3dd-probe-20260429`; push it before using it for a fresh remote checkout.
+- VGGT and Wan2.1 are Git submodules under `third_party/`; initialize them with `git submodule update --init --recursive`.
 
 This folder records the proposal-facing execution state for the current adapter / decoder experiments.
 
@@ -33,8 +33,7 @@ It is:
 - constrained to the selected two-input-view union frustum
 - launched through Slurm scripts in `slurm/`
 
-It is **not** a claim yet. The next required steps are full `.pt` generation, MLP baseline training, and visual / metric inspection.
-The full `.pt` generation had been submitted as job `85773` at the current handoff timestamp; monitor it instead of starting a duplicate default prep job.
+It is **not** a claim yet. Full `.pt` generation is complete for both 10k and 20k target variants, and the first 20k / 500k MLP baseline has completed. The current formal data file is `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`, which has `train=317` and `val=12`; the next required step is visual / metric inspection of job `86140` outputs.
 
 ### 2. What about ScanNet?
 The ScanNet v2 mesh-first line remains the diagnostic baseline.
@@ -56,7 +55,10 @@ InteriorGS remains a deferred high-quality data option. It is no longer the imme
 ## Core documents
 
 - `handoff_2026-05-03.md`
-  - current machine handoff for SCRREAM full mesh-complete data prep and training
+  - historical machine handoff for the first SCRREAM full mesh-complete prep chain
+
+- `handoff_2026-05-07.md`
+  - current SCRREAM data / Slurm / submodule handoff
 
 - `scannet_mesh_first_plan.md`
   - the current formal ScanNet v2 plan, assumptions, implementation status, and launch semantics

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 import torch
+from PIL import Image, ImageDraw
 from torch import nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -36,7 +37,7 @@ from vggt_nova_adapter_common_raw import (
     chamfer_l2,
     cleanup_distributed,
     count_parameters,
-    extract_vggt_features,
+    extract_vggt_feature_for_layer,
     get_targets,
     get_targets_cached,
     images_from_batch,
@@ -49,13 +50,33 @@ from vggt_nova_adapter_common_raw import (
     sampler_set_epoch,
     save_json,
     scene_ids_from_batch,
-    select_vggt_layer23,
     set_seed,
     trainable_parameter_names,
     write_point_cloud_ply,
     load_vggt,
     resolve_device,
 )
+
+QUALITY_THRESHOLDS = (0.02, 0.05, 0.10, 0.20)
+QUALITY_THRESHOLD_LABELS = tuple(f"{tau:.2f}" for tau in QUALITY_THRESHOLDS)
+QUALITY_DIRECTED_KEYS = (
+    "pred_to_gt_mean",
+    "pred_to_gt_median",
+    "pred_to_gt_p90",
+    "pred_to_gt_p95",
+    "gt_to_pred_mean",
+    "gt_to_pred_median",
+    "gt_to_pred_p90",
+    "gt_to_pred_p95",
+    "trimmed_cd_l2_95",
+    "trimmed_cd_l2_99",
+)
+QUALITY_F_KEYS = tuple(
+    f"{prefix}_tau_{label}"
+    for label in QUALITY_THRESHOLD_LABELS
+    for prefix in ("precision", "recall", "fscore")
+)
+QUALITY_METRIC_KEYS = QUALITY_DIRECTED_KEYS + QUALITY_F_KEYS
 
 
 class AdapterVelocityProbe(nn.Module):
@@ -142,6 +163,7 @@ def parse_args():
     parser.add_argument("--debug_one_batch", action="store_true")
     parser.add_argument("--nova_ckpt", default=None)
     parser.add_argument("--vggt_weights", default=None, help="Optional local VGGT-1B model.pt path; avoids network fallback on Slurm nodes.")
+    parser.add_argument("--vggt_layer", type=int, default=23, help="VGGT human layer to use as frozen representation. 0 means DINO patch tokens before VGGT alternating attention; 1-24 mean VGGT aggregator layers.")
     parser.add_argument("--dataset", default="scrream_adapter", choices=("scrream_adapter", "scannet"))
     parser.add_argument("--data_root", default=None, help="Dataset root for --dataset scannet, or adapter .pt path for --dataset scrream_adapter.")
     parser.add_argument("--train_split", default="train", help="Training split name for the selected dataset.")
@@ -170,7 +192,7 @@ def parse_args():
     parser.add_argument(
         "--feature_cache_dir",
         default=None,
-        help="Optional directory for persistent VGGT layer-23 feature cache keyed by frame paths.",
+        help="Optional directory for persistent VGGT feature cache keyed by frame paths and --vggt_layer.",
     )
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases tracking.")
     parser.add_argument("--wandb_project", default="PSUVPSC3DD")
@@ -183,6 +205,11 @@ def parse_args():
     parser.add_argument("--final_test", action="store_true", help="Run held-out test evaluation at the end of training.")
     parser.add_argument("--eval_batches", type=int, default=2, help="Validation batches per evaluation; <=0 means full split.")
     parser.add_argument("--test_eval_batches", type=int, default=0, help="Test batches for final evaluation; <=0 means full split.")
+    parser.add_argument("--val_flow_t_bins", type=int, default=10, help="Number of deterministic timestep bins for validation velocity-MSE diagnostics; <=0 disables the t-bin metrics.")
+    parser.add_argument("--val_metric_max_points", type=int, default=20000, help="Deterministic max point count for robust validation metrics; <=0 uses all points.")
+    parser.add_argument("--val_preview_samples", type=int, default=0, help="Number of validation samples to export as visual PLY previews per validation step.")
+    parser.add_argument("--val_preview_queries", type=int, default=40960, help="Prediction and display point count for validation visual preview PLYs.")
+    parser.add_argument("--val_preview_dir", default=None, help="Directory for validation visual previews; default <output_dir>/val_visual_<val_preview_queries>.")
     return parser.parse_args()
 
 
@@ -223,11 +250,235 @@ def save_checkpoint(path, adapter, optimizer, step, config, meta, best_loss, fir
     torch.save(payload, path)
 
 
-def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None):
+def flow_matching_diagnostics(
+    decoder,
+    tokens: torch.Tensor,
+    target_points: torch.Tensor,
+    seed: int,
+    num_views: int | None = None,
+    t_bins: int = 10,
+):
+    from nova3r.flow_matching.path import AffineProbPath
+    from nova3r.flow_matching.path.scheduler import CosineScheduler
+
+    bsz, num_points, _ = target_points.shape
+    generator = torch.Generator(device=target_points.device)
+    generator.manual_seed(seed)
+    path = AffineProbPath(scheduler=CosineScheduler())
+    if t_bins > 0:
+        centers = (torch.arange(t_bins, device=target_points.device, dtype=target_points.dtype) + 0.5) / float(t_bins)
+        losses = []
+        timesteps = []
+        for center in centers:
+            x0 = torch.rand(
+                target_points.shape,
+                device=target_points.device,
+                generator=generator,
+                dtype=target_points.dtype,
+            ) * 2 - 1
+            t = torch.full((bsz,), float(center.item()), device=target_points.device, dtype=target_points.dtype)
+            path_sample = path.sample(x_0=x0.float(), x_1=target_points.float(), t=t.float())
+            timestep = t[:, None].expand(bsz, num_points).float()
+            view_tensor = None
+            if num_views is not None:
+                view_tensor = torch.full((bsz,), float(num_views), device=target_points.device)
+            pred_velocity = decoder([tokens.float()], query_points=path_sample.x_t.float(), timestep=timestep, num_views=view_tensor)
+            losses.append((pred_velocity.float() - path_sample.dx_t.float()).pow(2).mean(dim=(1, 2)))
+            timesteps.append(t.float())
+        return torch.cat(losses, dim=0), torch.cat(timesteps, dim=0)
+    else:
+        x0 = torch.rand(target_points.shape, device=target_points.device, generator=generator, dtype=target_points.dtype) * 2 - 1
+        t = torch.rand((bsz,), device=target_points.device, generator=generator, dtype=target_points.dtype)
+        path_sample = path.sample(x_0=x0.float(), x_1=target_points.float(), t=t.float())
+        timestep = t[:, None].expand(bsz, num_points).float()
+        view_tensor = None
+        if num_views is not None:
+            view_tensor = torch.full((bsz,), float(num_views), device=target_points.device)
+        pred_velocity = decoder([tokens.float()], query_points=path_sample.x_t.float(), timestep=timestep, num_views=view_tensor)
+        sample_mse = (pred_velocity.float() - path_sample.dx_t.float()).pow(2).mean(dim=(1, 2))
+        return sample_mse, t.float()
+
+
+def nearest_distances_chunked(src: torch.Tensor, dst: torch.Tensor, chunk_size: int = 2048) -> torch.Tensor:
+    if src.ndim != 2 or dst.ndim != 2 or src.shape[-1] != 3 or dst.shape[-1] != 3:
+        raise ValueError(f"Expected [N,3] and [M,3], got {tuple(src.shape)} and {tuple(dst.shape)}")
+    if src.shape[0] == 0 or dst.shape[0] == 0:
+        raise ValueError("nearest_distances_chunked requires non-empty point clouds")
+    mins = []
+    for start in range(0, src.shape[0], chunk_size):
+        dist = torch.cdist(src[start : start + chunk_size].float(), dst.float(), p=2)
+        mins.append(dist.min(dim=1).values)
+    return torch.cat(mins, dim=0)
+
+
+def deterministic_subsample_points(points: torch.Tensor, max_points: int, seed: int) -> torch.Tensor:
+    if max_points <= 0 or points.shape[0] <= max_points:
+        return points
+    generator = torch.Generator(device=points.device)
+    generator.manual_seed(int(seed))
+    indices = torch.randperm(points.shape[0], device=points.device, generator=generator)[:max_points]
+    return points[indices]
+
+
+def pad_or_subsample_visual_points(points: torch.Tensor, target_count: int, seed: int) -> torch.Tensor:
+    if target_count <= 0 or points.shape[0] == target_count:
+        return points
+    generator = torch.Generator(device=points.device)
+    generator.manual_seed(int(seed))
+    if points.shape[0] > target_count:
+        indices = torch.randperm(points.shape[0], device=points.device, generator=generator)[:target_count]
+        return points[indices]
+    extra = torch.randint(points.shape[0], (target_count - points.shape[0],), device=points.device, generator=generator)
+    return torch.cat([points, points[extra]], dim=0)
+
+
+def _directed_distance_stats(distances: torch.Tensor, prefix: str) -> dict[str, float]:
+    sq = distances.square()
+    return {
+        f"{prefix}_mean": float(distances.mean().item()),
+        f"{prefix}_median": float(distances.median().item()),
+        f"{prefix}_p90": float(torch.quantile(distances, 0.90).item()),
+        f"{prefix}_p95": float(torch.quantile(distances, 0.95).item()),
+        f"{prefix}_mse": float(sq.mean().item()),
+        f"{prefix}_trimmed_mse_95": float(torch.topk(sq, max(1, int(round(0.95 * sq.numel()))), largest=False).values.mean().item()),
+        f"{prefix}_trimmed_mse_99": float(torch.topk(sq, max(1, int(round(0.99 * sq.numel()))), largest=False).values.mean().item()),
+    }
+
+
+def pointcloud_quality_metrics(
+    pred_points: torch.Tensor,
+    target_points: torch.Tensor,
+    thresholds: tuple[float, ...] = QUALITY_THRESHOLDS,
+    max_points: int = 20000,
+    seed: int = 17,
+) -> dict[str, float]:
+    pred = deterministic_subsample_points(pred_points, max_points=max_points, seed=seed)
+    target = deterministic_subsample_points(target_points, max_points=max_points, seed=seed + 1)
+    p2g = nearest_distances_chunked(pred, target)
+    g2p = nearest_distances_chunked(target, pred)
+    metrics = {}
+    metrics.update(_directed_distance_stats(p2g, "pred_to_gt"))
+    metrics.update(_directed_distance_stats(g2p, "gt_to_pred"))
+    metrics["trimmed_cd_l2_95"] = metrics["pred_to_gt_trimmed_mse_95"] + metrics["gt_to_pred_trimmed_mse_95"]
+    metrics["trimmed_cd_l2_99"] = metrics["pred_to_gt_trimmed_mse_99"] + metrics["gt_to_pred_trimmed_mse_99"]
+    metrics["metric_pred_points"] = float(pred.shape[0])
+    metrics["metric_gt_points"] = float(target.shape[0])
+    for tau in thresholds:
+        label = f"{tau:.2f}"
+        precision = float((p2g <= tau).float().mean().item())
+        recall = float((g2p <= tau).float().mean().item())
+        fscore = 0.0 if precision + recall == 0.0 else 2.0 * precision * recall / (precision + recall)
+        metrics[f"precision_tau_{label}"] = precision
+        metrics[f"recall_tau_{label}"] = recall
+        metrics[f"fscore_tau_{label}"] = fscore
+    return metrics
+
+
+def save_input_contact_sheet(images: torch.Tensor, path: Path, title: str) -> None:
+    imgs = images[0].detach().cpu().float().clamp(0, 1)
+    width, height = 320, 280
+    canvas = Image.new("RGB", (width * len(imgs), height + 34), "white")
+    draw = ImageDraw.Draw(canvas)
+    draw.text((6, 6), title[:180], fill=(0, 0, 0))
+    for idx, img in enumerate(imgs):
+        arr = (img.permute(1, 2, 0).numpy() * 255).astype("uint8")
+        view = Image.fromarray(arr).resize((width, height))
+        view_draw = ImageDraw.Draw(view)
+        view_draw.rectangle([0, 0, 120, 24], fill=(255, 255, 255))
+        view_draw.text((5, 5), f"view{idx}", fill=(0, 0, 0))
+        canvas.paste(view, (width * idx, 34))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(path)
+
+
+def sanitize_sample_id(scene_id: str) -> str:
+    return scene_id.replace("/", "__").replace("\\", "__").replace(" ", "_")
+
+
+def resolve_val_preview_root(args, output_dir: Path) -> Path:
+    if args.val_preview_dir:
+        return Path(args.val_preview_dir)
+    return output_dir / f"val_visual_{int(args.val_preview_queries)}"
+
+
+def save_val_preview_sample(
+    decoder,
+    tokens: torch.Tensor,
+    images: torch.Tensor,
+    batch,
+    meta: dict,
+    args,
+    batch_idx: int,
+    global_step: int,
+    output_dir: Path,
+    sample_metrics: dict[str, float],
+) -> dict[str, str | int | float]:
+    scene_id = scene_ids_from_batch(batch, batch_idx)[0]
+    sample_id = sanitize_sample_id(scene_id)
+    preview_root = resolve_val_preview_root(args, output_dir)
+    step_dir = preview_root / f"step_{global_step:06d}" / sample_id
+    step_dir.mkdir(parents=True, exist_ok=True)
+
+    pred = sample_decoder(
+        decoder,
+        tokens[:1].detach(),
+        int(args.val_preview_queries),
+        meta["fm_step_size"],
+        int(args.seed + 200000 + global_step * 1000 + batch_idx),
+        images.shape[1],
+    )
+    target_raw = get_targets(batch, meta["query_source"], max_points=None, norm_mode=meta.get("norm_mode", "none"))[:1]
+    visual_target = pad_or_subsample_visual_points(
+        target_raw[0],
+        target_count=int(args.val_preview_queries),
+        seed=int(args.seed + 300000 + global_step * 1000 + batch_idx),
+    )
+
+    pred_path = step_dir / f"pred_{int(args.val_preview_queries)}.ply"
+    gt_path = step_dir / f"pseudo_gt_{int(args.val_preview_queries)}.ply"
+    inputs_path = step_dir / "inputs.png"
+    metrics_path = step_dir / "metrics.json"
+    write_point_cloud_ply(pred_path, pred[0])
+    write_point_cloud_ply(gt_path, visual_target)
+    save_input_contact_sheet(images[:1], inputs_path, f"step={global_step} {scene_id}")
+
+    payload = {
+        "step": int(global_step),
+        "scene_id": scene_id,
+        "sample_id": sample_id,
+        "pred_path": str(pred_path),
+        "pseudo_gt_path": str(gt_path),
+        "inputs_path": str(inputs_path),
+        "source_gt_points": int(target_raw.shape[1]),
+        "visual_gt_points": int(visual_target.shape[0]),
+        "visual_pred_points": int(pred.shape[1]),
+    }
+    payload.update({f"val_{key}": float(value) for key, value in sample_metrics.items() if key in QUALITY_METRIC_KEYS})
+    save_json(metrics_path, payload)
+    return payload
+
+
+def _sum_metrics_into(totals: dict[str, float], counts: dict[str, int], metrics: dict[str, float]) -> None:
+    for key, value in metrics.items():
+        if key in QUALITY_METRIC_KEYS:
+            totals[key] += float(value)
+            counts[key] += 1
+
+
+def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, output_dir: Path | None = None, global_step: int | None = None, save_previews: bool = False):
     adapter_module = unwrap_adapter(adapter)
     adapter_module.eval()
-    total = 0.0
-    count = 0
+    total_chamfer = 0.0
+    chamfer_count = 0
+    total_velocity = 0.0
+    velocity_count = 0
+    bin_count = max(0, int(args.val_flow_t_bins))
+    bin_totals = [0.0 for _ in range(bin_count)]
+    bin_counts = [0 for _ in range(bin_count)]
+    quality_totals = {key: 0.0 for key in QUALITY_METRIC_KEYS}
+    quality_counts = {key: 0 for key in QUALITY_METRIC_KEYS}
+    preview_records = []
+    preview_limit = max(0, int(args.val_preview_samples))
     with torch.no_grad():
         for batch_idx, batch in enumerate(loader):
             if max_batches is not None and max_batches > 0 and batch_idx >= max_batches:
@@ -235,7 +486,14 @@ def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None):
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
             selected = get_selected_features(
-                run_eval.vggt, images, batch, run_eval.feature_cache, device, args.amp, args.feature_cache_dir
+                run_eval.vggt,
+                images,
+                batch,
+                run_eval.feature_cache,
+                device,
+                args.amp,
+                args.feature_cache_dir,
+                vggt_layer=args.vggt_layer,
             )
             tokens = adapter_module(selected)
             pred = sample_decoder(decoder, tokens, args.num_queries, meta["fm_step_size"], args.seed + batch_idx, images.shape[1])
@@ -243,24 +501,114 @@ def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None):
                 batch,
                 meta["query_source"],
                 max_points=args.num_queries,
+                norm_mode=meta.get("norm_mode", "none"),
             )
-            loss = chamfer_l2(pred, target)
-            total += loss.item()
-            count += 1
+            chamfer_loss = chamfer_l2(pred, target)
+            velocity_mse, timesteps = flow_matching_diagnostics(
+                decoder,
+                tokens,
+                target,
+                seed=args.seed + 100000 + batch_idx,
+                num_views=images.shape[1],
+                t_bins=bin_count,
+            )
+            batch_quality_for_preview = None
+            for sample_idx in range(pred.shape[0]):
+                sample_quality = pointcloud_quality_metrics(
+                    pred[sample_idx],
+                    target[sample_idx],
+                    max_points=int(args.val_metric_max_points),
+                    seed=int(args.seed + 400000 + batch_idx * 100 + sample_idx),
+                )
+                _sum_metrics_into(quality_totals, quality_counts, sample_quality)
+                if sample_idx == 0:
+                    batch_quality_for_preview = sample_quality
+            total_chamfer += float(chamfer_loss.item())
+            chamfer_count += 1
+            total_velocity += float(velocity_mse.sum().item())
+            batch_count = int(velocity_mse.numel())
+            velocity_count += batch_count
+            if bin_count > 0:
+                indices = torch.clamp((timesteps * bin_count).long(), min=0, max=bin_count - 1)
+                for bin_idx in range(bin_count):
+                    mask = indices == bin_idx
+                    if mask.any():
+                        values = velocity_mse[mask]
+                        bin_totals[bin_idx] += float(values.sum().item())
+                        bin_counts[bin_idx] += int(values.numel())
+            if save_previews and output_dir is not None and global_step is not None and len(preview_records) < preview_limit:
+                preview_records.append(
+                    save_val_preview_sample(
+                        decoder,
+                        tokens,
+                        images,
+                        batch,
+                        meta,
+                        args,
+                        batch_idx=batch_idx,
+                        global_step=global_step,
+                        output_dir=output_dir,
+                        sample_metrics=batch_quality_for_preview or {},
+                    )
+                )
     if torch.distributed.is_available() and torch.distributed.is_initialized():
-        stats = torch.tensor([total, float(count)], dtype=torch.float64, device=device)
+        stats = torch.tensor(
+            [total_chamfer, float(chamfer_count), total_velocity, float(velocity_count)],
+            dtype=torch.float64,
+            device=device,
+        )
         torch.distributed.all_reduce(stats, op=torch.distributed.ReduceOp.SUM)
-        total = float(stats[0].item())
-        count = int(stats[1].item())
+        total_chamfer = float(stats[0].item())
+        chamfer_count = int(stats[1].item())
+        total_velocity = float(stats[2].item())
+        velocity_count = int(stats[3].item())
+        if bin_count > 0:
+            bin_stats = torch.tensor(
+                bin_totals + [float(x) for x in bin_counts],
+                dtype=torch.float64,
+                device=device,
+            )
+            torch.distributed.all_reduce(bin_stats, op=torch.distributed.ReduceOp.SUM)
+            bin_totals = [float(x) for x in bin_stats[:bin_count].tolist()]
+            bin_counts = [int(x) for x in bin_stats[bin_count:].tolist()]
+        quality_stats = torch.tensor(
+            [quality_totals[key] for key in QUALITY_METRIC_KEYS] + [float(quality_counts[key]) for key in QUALITY_METRIC_KEYS],
+            dtype=torch.float64,
+            device=device,
+        )
+        torch.distributed.all_reduce(quality_stats, op=torch.distributed.ReduceOp.SUM)
+        metric_count = len(QUALITY_METRIC_KEYS)
+        quality_totals = {key: float(quality_stats[idx].item()) for idx, key in enumerate(QUALITY_METRIC_KEYS)}
+        quality_counts = {key: int(quality_stats[metric_count + idx].item()) for idx, key in enumerate(QUALITY_METRIC_KEYS)}
     adapter_module.train()
-    return total / max(count, 1)
+    loss_per_t_bin = [
+        {
+            "bin": bin_idx,
+            "t_center": (bin_idx + 0.5) / float(bin_count),
+            "mse": bin_totals[bin_idx] / max(bin_counts[bin_idx], 1),
+            "count": bin_counts[bin_idx],
+        }
+        for bin_idx in range(bin_count)
+    ]
+    metrics = {
+        "chamfer_l2": total_chamfer / max(chamfer_count, 1),
+        "velocity_mse": total_velocity / max(velocity_count, 1),
+        "loss_per_t_bin": loss_per_t_bin,
+        "preview_records": preview_records,
+    }
+    for bin_idx in range(bin_count):
+        key = f"loss_t_bin_{bin_idx:02d}"
+        metrics[key] = loss_per_t_bin[bin_idx]["mse"]
+    for key in QUALITY_METRIC_KEYS:
+        metrics[key] = quality_totals[key] / max(quality_counts[key], 1)
+    return metrics
 
 
 def cache_key_from_paths(paths):
     return hashlib.sha1("\n".join(paths).encode("utf-8")).hexdigest()
 
 
-def get_selected_features(vggt, images, batch, feature_cache, device, amp, feature_cache_dir=None):
+def get_selected_features(vggt, images, batch, feature_cache, device, amp, feature_cache_dir=None, vggt_layer=23):
     batch_size = images.shape[0]
     path_tuples = sample_keys_from_batch(batch)
     if len(path_tuples) != batch_size:
@@ -277,15 +625,14 @@ def get_selected_features(vggt, images, batch, feature_cache, device, amp, featu
 
     selected_list = []
     for i, paths in enumerate(path_tuples):
-        key = cache_key_from_paths(paths)
+        key = f"layer{int(vggt_layer):02d}_{cache_key_from_paths(paths)}"
         selected_cpu = feature_cache.get(key) if use_memory_cache else None
         cache_path = cache_root / f"{key}.pt" if cache_root is not None else None
         if selected_cpu is None and cache_path is not None and cache_path.exists():
             selected_cpu = torch.load(cache_path, map_location="cpu")
         if selected_cpu is None:
             with torch.no_grad():
-                features, _ = extract_vggt_features(vggt, images[i : i + 1], amp=amp)
-                selected, _, _ = select_vggt_layer23(features)
+                selected, _, _, _ = extract_vggt_feature_for_layer(vggt, images[i : i + 1], human_layer=int(vggt_layer), amp=amp)
             selected_cpu = selected.detach().cpu().to(torch.float16)
             if cache_path is not None:
                 torch.save(selected_cpu, cache_path)
@@ -401,12 +748,14 @@ def main():
         first_batch = next(iter(train_loader))
         first_batch = move_batch_to_device(first_batch, device)
         first_images = images_from_batch(first_batch)
-        first_features, patch_start_idx = extract_vggt_features(vggt, first_images[:1], amp=args.amp)
+        selected, selected_idx, reason, patch_start_idx = extract_vggt_feature_for_layer(
+            vggt,
+            first_images[:1],
+            human_layer=args.vggt_layer,
+            amp=args.amp,
+        )
         if is_main:
-            for i, feat in enumerate(first_features):
-                print(f"VGGT feature {i}: shape={tuple(feat.shape)}")
-        selected, selected_idx, reason = select_vggt_layer23(first_features)
-        if is_main:
+            print(f"Requested VGGT human layer: {args.vggt_layer}")
             print(f"Selected VGGT feature index: {selected_idx}")
             print(f"Selection reason: {reason}")
             print(f"Selected VGGT feature shape: {tuple(selected.shape)}")
@@ -465,6 +814,7 @@ def main():
         config = vars(args).copy()
         config.update(
             {
+                "vggt_layer": args.vggt_layer,
                 "selected_vggt_feature_index": selected_idx,
                 "selected_vggt_feature_shape": list(selected.shape),
                 "selection_reason": reason,
@@ -503,6 +853,9 @@ def main():
 
         best_loss = math.inf
         best_val_chamfer_l2 = math.inf
+        best_val_fscore_tau_010 = -math.inf
+        best_val_pred_to_gt_p90 = math.inf
+        last_val_metrics = None
         first_loss = None
         final_loss = None
         global_step = 0
@@ -515,6 +868,8 @@ def main():
             global_step = int(resume.get("step", 0))
             best_loss = float(resume.get("best_loss", best_loss))
             best_val_chamfer_l2 = float(resume.get("best_val_chamfer_l2", best_val_chamfer_l2))
+            best_val_fscore_tau_010 = float(resume.get("best_val_fscore_tau_0.10", best_val_fscore_tau_010))
+            best_val_pred_to_gt_p90 = float(resume.get("best_val_pred_to_gt_p90", best_val_pred_to_gt_p90))
             first_loss = resume.get("first_loss", first_loss)
             final_loss = resume.get("final_loss", final_loss)
             if is_main:
@@ -535,7 +890,16 @@ def main():
                 batch = next(data_iter)
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
-            selected = get_selected_features(vggt, images, batch, feature_cache, device, args.amp, args.feature_cache_dir)
+            selected = get_selected_features(
+                vggt,
+                images,
+                batch,
+                feature_cache,
+                device,
+                args.amp,
+                args.feature_cache_dir,
+                vggt_layer=args.vggt_layer,
+            )
             target = get_targets(batch, meta["query_source"], max_points=args.num_queries, norm_mode=meta.get("norm_mode", "none"))
 
             optimizer.zero_grad(set_to_none=True)
@@ -599,12 +963,17 @@ def main():
                 # memory/driver fragile, and losing the just-finished step makes
                 # debugging unnecessarily expensive.
                 if is_main and (global_step % args.save_every == 0 or args.debug_one_batch):
-                    save_checkpoint(output_dir / f"step_{global_step:06d}.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra={"best_val_chamfer_l2": best_val_chamfer_l2})
-                    save_checkpoint(output_dir / "latest.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra={"best_val_chamfer_l2": best_val_chamfer_l2})
+                    checkpoint_extra = {
+                        "best_val_chamfer_l2": best_val_chamfer_l2,
+                        "best_val_fscore_tau_0.10": best_val_fscore_tau_010,
+                        "best_val_pred_to_gt_p90": best_val_pred_to_gt_p90,
+                    }
+                    save_checkpoint(output_dir / f"step_{global_step:06d}.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra=checkpoint_extra)
+                    save_checkpoint(output_dir / "latest.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra=checkpoint_extra)
                 barrier_if_distributed(dist_ctx["enabled"])
-                val_loss = None
+                val_metrics = None
                 if val_loader is not None:
-                    val_loss = run_eval(
+                    val_metrics = run_eval(
                         probe_model,
                         decoder,
                         val_loader,
@@ -612,23 +981,140 @@ def main():
                         meta,
                         args,
                         max_batches=None if args.eval_batches <= 0 else args.eval_batches,
+                        output_dir=output_dir,
+                        global_step=global_step,
+                        save_previews=is_main and args.val_preview_samples > 0,
                     )
-                if is_main and val_loss is not None:
-                    save_json(output_dir / "validation_metrics.json", {"step": global_step, "val_chamfer_l2": val_loss})
+                if is_main and val_metrics is not None:
+                    last_val_metrics = val_metrics
+                    val_chamfer_l2 = float(val_metrics["chamfer_l2"])
+                    val_velocity_mse = float(val_metrics["velocity_mse"])
+                    val_fscore_tau_010 = float(val_metrics["fscore_tau_0.10"])
+                    val_pred_to_gt_p90 = float(val_metrics["pred_to_gt_p90"])
+                    validation_payload = {
+                        "step": global_step,
+                        "val_chamfer_l2": val_chamfer_l2,
+                        "val_velocity_mse": val_velocity_mse,
+                        "loss_per_t_bin": val_metrics.get("loss_per_t_bin", []),
+                        "preview_records": val_metrics.get("preview_records", []),
+                    }
+                    for key, value in val_metrics.items():
+                        if key.startswith("loss_t_bin_"):
+                            validation_payload[key] = float(value)
+                        elif key in QUALITY_METRIC_KEYS:
+                            validation_payload[f"val_{key}"] = float(value)
+                    if args.val_preview_samples > 0:
+                        preview_root = resolve_val_preview_root(args, output_dir)
+                        save_json(
+                            preview_root / "latest_index.json",
+                            {
+                                "step": global_step,
+                                "step_dir": str(preview_root / f"step_{global_step:06d}"),
+                                "preview_records": validation_payload["preview_records"],
+                            },
+                        )
+                    save_json(output_dir / "validation_metrics.json", validation_payload)
                     with log_path.open("a", encoding="utf-8") as log:
-                        log.write(f"validation step={global_step} val_chamfer_l2={val_loss:.8f}\n")
-                    if val_loss < best_val_chamfer_l2:
-                        best_val_chamfer_l2 = float(val_loss)
-                        save_checkpoint(output_dir / "best.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra={"best_val_chamfer_l2": best_val_chamfer_l2})
+                        log.write(
+                            f"validation step={global_step} "
+                            f"val_chamfer_l2={val_chamfer_l2:.8f} "
+                            f"val_velocity_mse={val_velocity_mse:.8f} "
+                            f"val_pred_to_gt_p90={val_pred_to_gt_p90:.8f} "
+                            f"val_gt_to_pred_p90={float(val_metrics['gt_to_pred_p90']):.8f} "
+                            f"val_fscore_tau_0.05={float(val_metrics['fscore_tau_0.05']):.8f} "
+                            f"val_fscore_tau_0.10={val_fscore_tau_010:.8f}"
+                        )
+                        for key in sorted(k for k in validation_payload if k.startswith("loss_t_bin_")):
+                            log.write(f" {key}={validation_payload[key]:.8f}")
+                        log.write("\n")
+                    next_best_val_chamfer_l2 = min(best_val_chamfer_l2, val_chamfer_l2)
+                    next_best_val_fscore_tau_010 = max(best_val_fscore_tau_010, val_fscore_tau_010)
+                    next_best_val_pred_to_gt_p90 = min(best_val_pred_to_gt_p90, val_pred_to_gt_p90)
+                    if val_chamfer_l2 < best_val_chamfer_l2:
+                        best_val_chamfer_l2 = val_chamfer_l2
+                        save_checkpoint(
+                            output_dir / "best.pth",
+                            probe_model,
+                            optimizer,
+                            global_step,
+                            config,
+                            meta,
+                            best_loss,
+                            first_loss,
+                            final_loss,
+                            extra={
+                                "best_val_chamfer_l2": next_best_val_chamfer_l2,
+                                "best_val_fscore_tau_0.10": next_best_val_fscore_tau_010,
+                                "best_val_pred_to_gt_p90": next_best_val_pred_to_gt_p90,
+                            },
+                        )
+                    if val_fscore_tau_010 > best_val_fscore_tau_010:
+                        best_val_fscore_tau_010 = val_fscore_tau_010
+                        save_checkpoint(
+                            output_dir / "best_fscore_010.pth",
+                            probe_model,
+                            optimizer,
+                            global_step,
+                            config,
+                            meta,
+                            best_loss,
+                            first_loss,
+                            final_loss,
+                            extra={
+                                "best_val_chamfer_l2": next_best_val_chamfer_l2,
+                                "best_val_fscore_tau_0.10": next_best_val_fscore_tau_010,
+                                "best_val_pred_to_gt_p90": next_best_val_pred_to_gt_p90,
+                            },
+                        )
+                    if val_pred_to_gt_p90 < best_val_pred_to_gt_p90:
+                        best_val_pred_to_gt_p90 = val_pred_to_gt_p90
+                        save_checkpoint(
+                            output_dir / "best_pred_to_gt_p90.pth",
+                            probe_model,
+                            optimizer,
+                            global_step,
+                            config,
+                            meta,
+                            best_loss,
+                            first_loss,
+                            final_loss,
+                            extra={
+                                "best_val_chamfer_l2": next_best_val_chamfer_l2,
+                                "best_val_fscore_tau_0.10": next_best_val_fscore_tau_010,
+                                "best_val_pred_to_gt_p90": next_best_val_pred_to_gt_p90,
+                            },
+                        )
+                    tracking_metrics = {
+                        "val/chamfer_l2": val_chamfer_l2,
+                        "val/velocity_mse": val_velocity_mse,
+                        "val/best_chamfer_l2": float(best_val_chamfer_l2),
+                        "val/pred_to_gt_p90": val_pred_to_gt_p90,
+                        "val/gt_to_pred_p90": float(val_metrics["gt_to_pred_p90"]),
+                        "val/fscore_tau_0.05": float(val_metrics["fscore_tau_0.05"]),
+                        "val/fscore_tau_0.10": val_fscore_tau_010,
+                        "val/precision_tau_0.10": float(val_metrics["precision_tau_0.10"]),
+                        "val/recall_tau_0.10": float(val_metrics["recall_tau_0.10"]),
+                        "val/trimmed_cd_l2_95": float(val_metrics["trimmed_cd_l2_95"]),
+                        "val/best_fscore_tau_0.10": float(best_val_fscore_tau_010),
+                        "val/best_pred_to_gt_p90": float(best_val_pred_to_gt_p90),
+                    }
+                    for key, value in validation_payload.items():
+                        if key.startswith("loss_t_bin_"):
+                            tracking_metrics[f"val/{key}"] = float(value)
                     if wandb_run is not None:
-                        wandb_run.log({"val/chamfer_l2": float(val_loss), "val/best_chamfer_l2": float(best_val_chamfer_l2)}, step=global_step)
+                        wandb_run.log(tracking_metrics, step=global_step)
                     if swanlab_run:
-                        swanlab.log({"val/chamfer_l2": float(val_loss), "val/best_chamfer_l2": float(best_val_chamfer_l2)}, step=global_step)
+                        swanlab.log(tracking_metrics, step=global_step)
                 barrier_if_distributed(dist_ctx["enabled"])
             if global_step % args.save_every == 0 or args.debug_one_batch:
                 if is_main:
-                    save_checkpoint(output_dir / f"step_{global_step:06d}.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra={"best_val_chamfer_l2": best_val_chamfer_l2})
-                    save_checkpoint(output_dir / "latest.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra={"best_val_chamfer_l2": best_val_chamfer_l2})
+                    checkpoint_extra = {
+                        "best_val_chamfer_l2": best_val_chamfer_l2,
+                        "best_val_fscore_tau_0.10": best_val_fscore_tau_010,
+                        "best_val_pred_to_gt_p90": best_val_pred_to_gt_p90,
+                    }
+                    save_checkpoint(output_dir / f"step_{global_step:06d}.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra=checkpoint_extra)
+                    save_checkpoint(output_dir / "latest.pth", probe_model, optimizer, global_step, config, meta, best_loss, first_loss, final_loss, extra=checkpoint_extra)
                     try:
                         scene_ids = scene_ids_from_batch(batch, global_step)
                         ply_dir = output_dir / "ply"
@@ -650,9 +1136,9 @@ def main():
                             swanlab.log({"export/failed": 1.0}, step=global_step)
                 barrier_if_distributed(dist_ctx["enabled"])
 
-        test_loss = None
+        test_metrics = None
         if test_loader is not None:
-            test_loss = run_eval(
+            test_metrics = run_eval(
                 probe_model,
                 decoder,
                 test_loader,
@@ -662,24 +1148,70 @@ def main():
                 max_batches=None if args.test_eval_batches <= 0 else args.test_eval_batches,
             )
         if is_main:
-            final_metrics = {"first_loss": first_loss, "final_loss": final_loss, "best_loss": best_loss, "best_val_chamfer_l2": best_val_chamfer_l2}
-            if test_loss is not None:
-                final_metrics["test_chamfer_l2"] = float(test_loss)
-                save_json(output_dir / "test_metrics.json", {"step": global_step, "test_chamfer_l2": float(test_loss)})
-                print(f"Final test chamfer_l2: {test_loss}")
+            final_metrics = {
+                "first_loss": first_loss,
+                "final_loss": final_loss,
+                "best_loss": best_loss,
+                "best_val_chamfer_l2": best_val_chamfer_l2,
+                "best_val_fscore_tau_0.10": best_val_fscore_tau_010,
+                "best_val_pred_to_gt_p90": best_val_pred_to_gt_p90,
+            }
+            if last_val_metrics is not None:
+                final_metrics["last_val_chamfer_l2"] = float(last_val_metrics["chamfer_l2"])
+                final_metrics["last_val_velocity_mse"] = float(last_val_metrics["velocity_mse"])
+                final_metrics["last_val_loss_per_t_bin"] = last_val_metrics.get("loss_per_t_bin", [])
+                for key in QUALITY_METRIC_KEYS:
+                    final_metrics[f"last_val_{key}"] = float(last_val_metrics[key])
+            if test_metrics is not None:
+                test_chamfer_l2 = float(test_metrics["chamfer_l2"])
+                test_velocity_mse = float(test_metrics["velocity_mse"])
+                test_payload = {
+                    "step": global_step,
+                    "test_chamfer_l2": test_chamfer_l2,
+                    "test_velocity_mse": test_velocity_mse,
+                    "loss_per_t_bin": test_metrics.get("loss_per_t_bin", []),
+                }
+                for key, value in test_metrics.items():
+                    if key.startswith("loss_t_bin_"):
+                        test_payload[key] = float(value)
+                    elif key in QUALITY_METRIC_KEYS:
+                        test_payload[f"test_{key}"] = float(value)
+                final_metrics["test_chamfer_l2"] = test_chamfer_l2
+                final_metrics["test_velocity_mse"] = test_velocity_mse
+                for key in QUALITY_METRIC_KEYS:
+                    final_metrics[f"test_{key}"] = float(test_metrics[key])
+                save_json(output_dir / "test_metrics.json", test_payload)
+                print(f"Final test chamfer_l2: {test_chamfer_l2}")
+                print(f"Final test velocity_mse: {test_velocity_mse}")
                 with log_path.open("a", encoding="utf-8") as log:
-                    log.write(f"final_test step={global_step} test_chamfer_l2={test_loss:.8f}\n")
+                    log.write(
+                        f"final_test step={global_step} "
+                        f"test_chamfer_l2={test_chamfer_l2:.8f} "
+                        f"test_velocity_mse={test_velocity_mse:.8f}\n"
+                    )
+                tracking_test = {
+                    "test/chamfer_l2": test_chamfer_l2,
+                    "test/velocity_mse": test_velocity_mse,
+                }
+                for key, value in test_payload.items():
+                    if key.startswith("loss_t_bin_"):
+                        tracking_test[f"test/{key}"] = float(value)
+                    elif key.startswith("test_"):
+                        tracking_test["test/" + key[len("test_"):]] = float(value)
                 if wandb_run is not None:
-                    wandb_run.summary["test_chamfer_l2"] = float(test_loss)
-                    wandb_run.log({"test/chamfer_l2": float(test_loss)}, step=global_step)
+                    wandb_run.summary["test_chamfer_l2"] = test_chamfer_l2
+                    wandb_run.summary["test_velocity_mse"] = test_velocity_mse
+                    wandb_run.log(tracking_test, step=global_step)
                 if swanlab_run:
-                    swanlab.log({"test/chamfer_l2": float(test_loss)}, step=global_step)
+                    swanlab.log(tracking_test, step=global_step)
             save_json(output_dir / "final_metrics.json", final_metrics)
             if wandb_run is not None:
                 wandb_run.summary["first_loss"] = first_loss
                 wandb_run.summary["final_loss"] = final_loss
                 wandb_run.summary["best_loss"] = best_loss
                 wandb_run.summary["best_val_chamfer_l2"] = best_val_chamfer_l2
+                wandb_run.summary["best_val_fscore_tau_0.10"] = best_val_fscore_tau_010
+                wandb_run.summary["best_val_pred_to_gt_p90"] = best_val_pred_to_gt_p90
                 wandb_run.finish()
             if swanlab_run:
                 swanlab.log(
@@ -688,6 +1220,8 @@ def main():
                         "summary/final_loss": final_loss,
                         "summary/best_loss": best_loss,
                         "summary/best_val_chamfer_l2": best_val_chamfer_l2,
+                        "summary/best_val_fscore_tau_0.10": best_val_fscore_tau_010,
+                        "summary/best_val_pred_to_gt_p90": best_val_pred_to_gt_p90,
                     },
                     step=global_step,
                 )
