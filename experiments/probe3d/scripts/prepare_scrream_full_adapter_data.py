@@ -346,24 +346,83 @@ def estimate_mesh_surface_area(mesh_path: Path) -> float:
     return area if np.isfinite(area) and area > 0 else 0.0
 
 
+def load_sequence_meta_object_names(sequence_dir: Path) -> tuple[Path, list[str]]:
+    meta_path = sequence_dir / "meta.txt"
+    if not meta_path.is_file():
+        raise FileNotFoundError(f"Missing sequence object metadata: {meta_path}")
+
+    object_names = []
+    seen = set()
+    with meta_path.open("r", encoding="utf-8") as handle:
+        for line_idx, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Expected '<category> <object_name> <instance_id>' in {meta_path}:{line_idx}, got {stripped!r}"
+                )
+            object_name = parts[1]
+            if object_name not in seen:
+                object_names.append(object_name)
+                seen.add(object_name)
+
+    if not object_names:
+        raise ValueError(f"No object names found in sequence metadata: {meta_path}")
+    return meta_path, object_names
+
+
+def select_mesh_paths_from_sequence_meta(
+    scene_dir: Path,
+    object_names: list[str],
+) -> tuple[list[Path], list[str]]:
+    mesh_dir = scene_dir / "meshes"
+    all_mesh_paths = sorted(mesh_dir.glob("*.obj"))
+    if not all_mesh_paths:
+        raise FileNotFoundError(f"No OBJ meshes found in {mesh_dir}")
+
+    mesh_by_name = {path.stem: path for path in all_mesh_paths}
+    missing = [name for name in object_names if name not in mesh_by_name]
+    if missing:
+        raise FileNotFoundError(f"Objects from meta.txt do not have matching OBJ meshes in {mesh_dir}: {missing}")
+
+    allowed_names = set(object_names)
+    selected_paths = [mesh_by_name[name] for name in object_names]
+    excluded_paths = [str(path) for path in all_mesh_paths if path.stem not in allowed_names]
+    return selected_paths, excluded_paths
+
+
+def mesh_meta_cache_label(scene_dir: Path, sequence_dir: Path, object_names: list[str]) -> str:
+    digest = hashlib.sha1("\n".join(object_names).encode("utf-8")).hexdigest()[:12]
+    return f"{scene_dir.name}_{sequence_dir.name}_meta{digest}"
+
+
 def load_or_build_mesh_points_world(
     scene_dir: Path,
     cache_dir: Path,
     sample_count: int,
     voxel_size: float,
     seed: int,
+    mesh_paths: list[Path],
+    cache_label: str,
+    mesh_object_names: list[str],
 ) -> tuple[np.ndarray, list[str]]:
-    mesh_dir = scene_dir / "meshes"
-    mesh_paths = sorted(mesh_dir.glob("*.obj"))
     if not mesh_paths:
-        raise FileNotFoundError(f"No OBJ meshes found in {mesh_dir}")
+        raise FileNotFoundError(f"No OBJ meshes selected for {scene_dir}")
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_name = f"{scene_dir.name}_mesh_complete_area_s{sample_count}_v{voxel_size:.5f}_seed{seed}.npz"
+    cache_name = f"{cache_label}_mesh_complete_area_s{sample_count}_v{voxel_size:.5f}_seed{seed}.npz"
     cache_path = cache_dir / cache_name
     if cache_path.is_file():
         with np.load(cache_path, allow_pickle=True) as data:
             points = data["points_world"].astype(np.float32)
             cached_mesh_files = [str(x) for x in data["mesh_files"].tolist()]
+        expected_mesh_files = [str(path) for path in mesh_paths]
+        if cached_mesh_files != expected_mesh_files:
+            raise ValueError(
+                f"Mesh cache {cache_path} does not match the selected sequence mesh set; "
+                "remove the cache file or use a different --mesh_cache_dir."
+            )
         return points, cached_mesh_files
 
     mesh_areas = np.asarray([estimate_mesh_surface_area(mesh_path) for mesh_path in mesh_paths], dtype=np.float64)
@@ -379,7 +438,7 @@ def load_or_build_mesh_points_world(
         if points.size > 0:
             all_points.append(points)
     if not all_points:
-        raise ValueError(f"No surface points could be sampled from {mesh_dir}")
+        raise ValueError(f"No surface points could be sampled from {len(mesh_paths)} selected OBJ meshes for {scene_dir}")
     points_world = np.concatenate(all_points, axis=0)
     points_world = voxel_grid_filter(points_world, voxel_size=voxel_size)
     if points_world.shape[0] > sample_count:
@@ -390,6 +449,7 @@ def load_or_build_mesh_points_world(
         cache_path,
         points_world=points_world.astype(np.float32),
         mesh_files=np.asarray([str(path) for path in mesh_paths], dtype=object),
+        mesh_object_names=np.asarray(mesh_object_names, dtype=object),
         mesh_areas=mesh_areas.astype(np.float32),
         mesh_sample_budgets=budgets.astype(np.int64),
     )
@@ -540,6 +600,10 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
     ]
     dense_ids: list[int] = []
     mesh_files: list[str] = []
+    mesh_files_excluded_by_meta: list[str] = []
+    mesh_meta_object_names: list[str] = []
+    mesh_meta_path: Path | None = None
+    mesh_cache_label: str | None = None
     points_after_source = 0
     scene_dir = sequence_dir.parent
     if args.target_source == "depth_gt_dense":
@@ -573,6 +637,12 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
     elif args.target_source == "mesh_complete":
         if mesh_cache_dir is None:
             raise ValueError("mesh_cache_dir must be provided for mesh_complete target generation")
+        mesh_meta_path, mesh_meta_object_names = load_sequence_meta_object_names(sequence_dir)
+        selected_mesh_paths, mesh_files_excluded_by_meta = select_mesh_paths_from_sequence_meta(
+            scene_dir=scene_dir,
+            object_names=mesh_meta_object_names,
+        )
+        mesh_cache_label = mesh_meta_cache_label(scene_dir, sequence_dir, mesh_meta_object_names)
         scene_seed = stable_seed(f"{scene_dir.name}/mesh_complete", args.split_seed)
         points_world, mesh_files = load_or_build_mesh_points_world(
             scene_dir=scene_dir,
@@ -580,6 +650,9 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
             sample_count=args.mesh_sample_points,
             voxel_size=args.voxel_size,
             seed=scene_seed,
+            mesh_paths=selected_mesh_paths,
+            cache_label=mesh_cache_label,
+            mesh_object_names=mesh_meta_object_names,
         )
         points_after_source = int(points_world.shape[0])
         target_source_label = "scrream_registered_mesh_complete"
@@ -620,6 +693,11 @@ def process_sample(sample: PairSample, args: argparse.Namespace, fps_device: tor
         "target_frame_ids": dense_ids,
         "dense_frame_ids": dense_ids,
         "mesh_files": mesh_files,
+        "mesh_sequence_meta_filter": args.target_source == "mesh_complete",
+        "mesh_meta_path": str(mesh_meta_path) if mesh_meta_path is not None else None,
+        "mesh_meta_object_names": mesh_meta_object_names,
+        "mesh_files_excluded_by_meta": mesh_files_excluded_by_meta,
+        "mesh_cache_label": mesh_cache_label,
         "mesh_sample_points": int(args.mesh_sample_points),
         "depth_scale": float(args.depth_scale),
         "voxel_size": float(args.voxel_size),
@@ -730,6 +808,7 @@ def main() -> None:
             "voxel_size": float(args.voxel_size),
             "mesh_sample_points": int(args.mesh_sample_points),
             "mesh_cache_dir": str(mesh_cache_dir),
+            "mesh_sequence_meta_filter": args.target_source == "mesh_complete",
             "dense_stride": int(args.dense_stride),
             "dense_context": int(args.dense_context),
             "split_seed": int(args.split_seed),
@@ -748,6 +827,8 @@ def main() -> None:
         "data_root": str(data_root),
         "pair_list": str(pair_list_path),
         "output_path": str(output_path),
+        "target_source": args.target_source,
+        "mesh_sequence_meta_filter": args.target_source == "mesh_complete",
         "target_points_shape": list(target_points_tensor.shape),
         "scene_splits": scene_splits,
         "split_counts": split_counts,

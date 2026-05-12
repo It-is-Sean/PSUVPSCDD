@@ -1,5 +1,120 @@
 # Experiment history summary
 
+## 2026-05-12 WAN Route2 completion and setting audit
+
+The WAN Route2 branch was sanity-checked and then completed as a full 15-run ablation pack.
+
+Key results from job `86316`:
+
+- the WAN caches are not degenerate: real WAN features differ materially from the zero-feature and sample-shuffle controls;
+- mean feature relative L2 to the reference config is `1.4833955196788304`;
+- mean adapter-token relative L2 to the reference config is `0.9976405603462312`;
+- zero-control `t499/layer09` reached `best_val_fscore_tau_0.10=0.38500468702435137`, `best_val_chamfer_l2=0.8643565624952316`, and `best_val_pred_to_gt_p90=0.47307824591795605`;
+- sample-shuffle `t499/layer09` reached `best_val_fscore_tau_0.10=0.37489499366133267`, `best_val_chamfer_l2=0.682008907198906`, and `best_val_pred_to_gt_p90=0.6679268131653467`.
+
+Formal Route2 training pack:
+
+- job `86307` / `scrream_wan_t2v_pack`: `COMPLETED`, exit `0:0`, elapsed `13:36:04`, node `air-node-04`;
+- full grid completed: timesteps `249,499,749` x code layers `9,14,19,24,29`;
+- best WAN run: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`;
+- clean-GT VGGT layer `16` remained much stronger with `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, and `best_val_chamfer_l2=0.026904070439438026`.
+
+Interpretation:
+
+- the WAN route is live, but the absolute scores are still much worse than clean-GT VGGT;
+- the current evidence is strong enough to rule out a trivial cache-loader bug, but not strong enough to support a claim that WAN is a good geometric backbone in this probe setting;
+- the reasonable follow-up is Route2.1: test `no_noise` and `low_noise` feature modes for layers `9,14,29`, plus one targeted `t499/layer09 + norm` setting, before moving to pair-tiled context, I2V/FLF2V, or broader adapter changes.
+
+## 2026-05-11 SCRREAM sequence-meta GT correction and clean VGGT rerun
+
+The mesh-complete SCRREAM GT was found to include scene-level objects that were not present in some reduced sequences. The concrete audit case was `scene08/scene08_reduced_00_000220_000260`, where mannequin OBJ files existed under `scene08/meshes/` but were absent from `scene08_reduced_00/meta.txt`.
+
+Code/data correction:
+
+- `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py` now reads each sequence `meta.txt`.
+- `mesh_complete` samples only OBJ files whose stem is listed in the current sequence metadata.
+- mesh cache labels now include `scene + sequence + object-set hash`, preventing reuse of old scene-level reservoirs.
+- old pre-meta-filter `.pt` files were moved to `experiments/probe3d/adapter_data/deprecated_meta_filter_bug/`.
+
+Regeneration jobs:
+
+- `86283` / `scrream_mesh_prep`: `COMPLETED`, exit `0:0`, elapsed `00:51:13`
+- `86284` / `scrream_split_merge`: `COMPLETED`, exit `0:0`, elapsed `00:00:29`
+- output: `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+- shape / split: `[329, 20000, 3]`, `train=317`, `val=12`
+- metadata: `mesh_sequence_meta_filter=True`
+
+Known sample check:
+
+- `scene08/scene08_reduced_00_000220_000260`
+- old selected mesh count: `25`, including three mannequin OBJ files
+- new selected mesh count: `22`
+- excluded by sequence metadata: `human-female_mannequin_green_top.obj`, `human-female_mannequin_grey_top.obj`, `human-male_mannequin_colorful_top.obj`
+
+Clean-GT VGGT rerun:
+
+- `86285` requested `4 x A100` but was cancelled because Slurm predicted a long resource wait.
+- `86286` completed on `air-node-04` with exit `0:0`, elapsed `02:23:11`.
+- output prefix: `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_vggt_layerXX`
+- job `86286` uses the 30-epoch-equivalent `9510` steps because it was submitted before the default epoch change.
+
+Clean-GT layer result:
+
+| layer | best F@0.10 ↑ | best pred→GT p90 ↓ | best Chamfer-L2 ↓ | interpretation |
+| ---: | ---: | ---: | ---: | --- |
+| 16 | **0.6860468604251301** | **0.20770130679011345** | **0.026904070439438026** | current default |
+| 24 | 0.6802513448244976 | 0.25152526050806046 | 0.03554012098660072 | main comparison point |
+| 20 | 0.548158719135383 | 0.36711231619119644 | 0.0767408860847354 | no longer default under clean GT |
+
+The sequence-meta correction changed the layer ranking: pre-meta-filter job `86149` favored layer `20`, but the clean target favors layer `16`, with layer `24` close on F-score and better final GT-to-pred recall.
+
+Training-length policy changed after this submission: formal SCRREAM VGGT/WAN ablation defaults now use `50` epochs unless explicitly overridden.
+
+## 2026-05-10 WAN Route2 setup
+
+The completed SCRREAM VGGT layer ablation originally motivated a WAN2.1 T2V representation probe. After the 2026-05-11 sequence-meta GT correction, the old VGGT result is pre-meta-filter history; WAN should be compared against the clean-GT VGGT rerun once it finishes. The WAN branch is designed to keep the training problem fixed and swap only the representation.
+
+Fixed setting inherited from the VGGT ablation:
+
+- adapter data: `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+- split: `train=317`, `val=12`
+- GT: sequence-meta-filtered registered SCRREAM mesh-complete surfaces, two-view union-frustum crop, first input camera frame, `20000` points
+- adapter/loss/decoder: `MLP-L4-H1024`, `nova_flow`, NOVA `scene_ae`
+- validation: full val split, robust one-way/F-score/trimmed-CD metrics, `val_visual_40960/`
+
+WAN Route2 implementation added:
+
+- `third_party/VidFM3D` as a reference submodule
+- `experiments/probe3d/requirements-wan-t2v.txt`
+- `experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py`
+- `experiments/probe3d/train_wan_t2v_nova_adapter.py`
+- `slurm/scrream_wan_t2v_download.sbatch`
+- `slurm/scrream_wan_t2v_precompute.sbatch`
+- `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`
+
+WAN representation grid:
+
+- model: `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`
+- prompt: empty string
+- context: 81 RGB frames around each SCRREAM pair
+- timesteps: `249,499,749`
+- code layer ids: `9,14,19,24,29`
+- cached tensor shape: `[3120,1536]`
+
+Preflight and execution status:
+
+- the isolated WAN dependency set imported successfully in `nova3r` with `diffusers 0.37.1`, `transformers 4.57.6`, and `tokenizers 0.22.2`;
+- window-only validation passed for all `329` SCRREAM samples;
+- WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890` through the compute-node SSH tunnel to `air-server:127.0.0.1:17890`;
+- checkpoint download/preflight completed; the local checkpoint is `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB);
+- 2-sample feature smoke job `86282` completed for timestep `749`, layer `20`, writing two `[3120,1536]` FP16 cache files;
+- full feature precompute jobs `86292`, `86293`, and `86294` completed for timesteps `249`, `499`, and `749`;
+- feature cache root `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81` contains `4937` `.pt` files / about `45G`;
+- official grid coverage is complete at `329` samples for every `(timestep, layer)` in `249,499,749 x 9,14,19,24,29`;
+- first training pack attempt `86306` failed immediately on a reduced-loss float `.item()` bug;
+- `experiments/probe3d/train_wan_t2v_nova_adapter.py` was fixed by keeping `final_loss = reduced_loss`;
+- replacement pack job `86307` completed on `air-node-04`, one A100, 50 epochs / `15850` steps per run, exit `0:0`, elapsed `13:36:04`.
+
 ## 2026-05-07 SCRREAM 20k / 500k adapter run
 
 The SCRREAM mesh-complete line advanced from data-prep handoff to a completed 20k / 500k MLP baseline.

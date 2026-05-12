@@ -858,9 +858,11 @@ def save_json(path: str | Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def trainable_parameter_names(modules: dict[str, torch.nn.Module]) -> list[str]:
+def trainable_parameter_names(modules: dict[str, torch.nn.Module | None]) -> list[str]:
     names = []
     for prefix, module in modules.items():
+        if module is None:
+            continue
         for name, param in module.named_parameters():
             if param.requires_grad:
                 names.append(f"{prefix}.{name}")
@@ -870,6 +872,8 @@ def trainable_parameter_names(modules: dict[str, torch.nn.Module]) -> list[str]:
 def assert_only_adapter_trainable(adapter, vggt, decoder) -> None:
     bad = []
     for prefix, module in (("vggt", vggt), ("decoder", decoder)):
+        if module is None:
+            continue
         for name, param in module.named_parameters():
             if param.requires_grad:
                 bad.append(f"{prefix}.{name}")

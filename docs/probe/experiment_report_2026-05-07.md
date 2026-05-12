@@ -2,6 +2,8 @@
 
 Generated at `2026-05-07 23:25 CST`.
 
+Supersession note updated `2026-05-12`: this report predates the SCRREAM sequence-meta GT correction and the later WAN Route2 audit. The robust VGGT layer ablation job `86149` and its layer-20 recommendation are now **pre-meta-filter history**, not clean-GT claims. The clean-GT rerun `86286` completed successfully; current default VGGT layer is `16`, with layer `24` as the main comparison point. WAN Route2 sanity job `86316` and full pack job `86307` completed later; best WAN was `t499/layer09`, still far weaker than clean-GT VGGT. Use this document only to understand the old evidence trail.
+
 This report summarizes the experiment evidence currently available in this workspace. It separates valid current results from diagnostic history and invalidated branches, because several earlier conclusions were corrected after data and sampling audits.
 
 Primary source files checked for this report:
@@ -20,10 +22,10 @@ Primary source files checked for this report:
 
 The strongest current branch is now the full-SCRREAM mesh-complete adapter line, not the old local `eval_scrream` line and not the older ScanNet-only line.
 
-Current valid SCRREAM baseline:
+Valid-at-report-time SCRREAM baseline, now pre-meta-filter history:
 
 - data: full SCRREAM from `~/datasets/SCRREAM`
-- GT: registered scene meshes, sampled by surface area, cropped to the two-input-view union frustum, stored in first input camera coordinates
+- GT at the time: registered scene meshes, sampled by surface area, cropped to the two-input-view union frustum, stored in first input camera coordinates
 - adapter: frozen VGGT features -> MLP-L4-H1024 -> frozen NOVA scene decoder
 - objective: `nova_flow`
 - best completed full run: 20k target points / 500k mesh reservoir / trainplus-test split
@@ -43,24 +45,24 @@ The older ScanNet probe remains useful, but mostly as diagnosis:
 - ScanNet numbers with old `max_interval=30` are interval-confounded because preprocessing already used `frame_skip=20`;
 - old local SCRREAM `eval_scrream` results are invalid for claims because the data was the released evaluation subset, not the full dataset.
 
-The robust VGGT-layer ablation has now completed:
+The robust VGGT-layer ablation completed before the sequence-meta GT correction:
 
 - Slurm job: `86149` / `scrream_vggt_layer_pack`
 - layers tested: `0,4,8,12,16,20,24`
 - validation: full 12-sample val split, robust one-way/F-score/trimmed-CD metrics, and `40960`-point visual exports
-- current best default layer: `20`
+- historical pre-meta-filter best layer: `20`
 - layer-20 metrics: `val_fscore_tau_0.10=0.672747712053826`, `val_pred_to_gt_p90=0.23175348962346712`, `val_gt_to_pred_p90=0.15852033160626888`, `val_chamfer_l2=0.03473521831134955`
 - main qualitative comparison: layer `16`, which has the lowest prediction-side p90 distance (`0.20785426969329515`)
 
-## Evidence Tiers
+## Evidence Tiers At Report Time
 
-### Tier 1 — Current Valid Evidence
+### Tier 1 — Valid Evidence At Report Time
 
-These are the results that can currently guide the next experiment:
+These were the results that could guide the next experiment before the 2026-05-11 sequence-meta GT correction:
 
 - full SCRREAM mesh-complete `.pt` datasets generated from `~/datasets/SCRREAM`;
 - completed SCRREAM MLP baseline `86140`;
-- completed SCRREAM robust VGGT layer ablation, with layer `20` selected as the current default representation;
+- completed pre-meta-filter SCRREAM robust VGGT layer ablation, with layer `20` selected only as the historical default before the sequence-meta correction;
 - ScanNet corrected-interval robust evaluation as a failure-mode diagnostic.
 
 ### Tier 2 — Useful Diagnostics
@@ -83,13 +85,13 @@ These should not be used for formal claims:
 - first stopped `chamfer_sample` branch before DDP gradient synchronization was fixed;
 - local `scrream_official_depth_mix_*` artifacts unless a future explicit depth-mix ablation is requested.
 
-## Current SCRREAM Data Construction
+## SCRREAM Data Construction At Report Time
 
 The active adapter data bridge is:
 
 - `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py`
 
-The current GT source is `mesh_complete`, not dense-depth aggregation.
+The report-time GT source was `mesh_complete`, not dense-depth aggregation. The current post-2026-05-11 version adds sequence `meta.txt` filtering before mesh sampling.
 
 Pipeline:
 
@@ -107,7 +109,7 @@ This construction is the closest current match to the intended NOVA-style target
 Important distinction from the older dense-depth idea:
 
 - `depth_gt_dense` aggregates observed `depth_gt` frames between the two input frames. It can contain surfaces invisible in the first input view if intermediate frames saw them, but it is still limited to observed depth surfaces.
-- `mesh_complete` samples registered scene meshes. It can provide surfaces that are not directly visible in the input RGB/depth frames but lie inside the input-view frustum. This is better aligned with training an adapter for completion.
+- `mesh_complete` samples registered scene meshes. In the current corrected version, those meshes are first filtered by the sequence `meta.txt`. It can provide surfaces that are not directly visible in the input RGB/depth frames but lie inside the input-view frustum. This is better aligned with training an adapter for completion.
 
 ## Generated SCRREAM Adapter Datasets
 
@@ -557,17 +559,17 @@ The completed robust layer ablation answered the immediate representation-layer 
 - layers `4,8,12,16,20,24` test progressively deeper VGGT representations;
 - validation logs `val_velocity_mse`, `loss_per_t_bin`, one-way distance, F-score, and trimmed CD.
 
-Conclusion:
+Historical conclusion before the sequence-meta correction:
 
 - late VGGT layers are clearly stronger than DINO-only / early VGGT layers;
-- layer `20` is the current default representation for the next probe version;
+- layer `20` was the best pre-meta-filter representation;
 - layer `16` should remain in visual comparisons because it has the lowest prediction-side p90 distance.
 
 ## GT Construction Conclusions
 
 ### What Worked Best Conceptually
 
-For SCRREAM, `mesh_complete` is the current best GT construction because it uses registered complete scene meshes and then limits supervision to the union of the two input-view frusta.
+For SCRREAM, `mesh_complete` remains the preferred GT construction, but after 2026-05-11 it must use the sequence-meta-filtered mesh set before limiting supervision to the union of the two input-view frusta.
 
 This avoids two bad extremes:
 
@@ -602,21 +604,21 @@ The honest read of all experiments so far is:
 4. Increasing target/query density from 10k to 20k helped only slightly.
 5. ScanNet showed that low Chamfer can hide visually bad precision/outlier behavior.
 6. Future SCRREAM claims must include robust metrics and PLY/render inspection, not only `best_val_chamfer_l2`.
-7. The VGGT layer ablation resolved the immediate representation-layer question: layer `20` is the current default, with layer `16` as the main outlier-sensitive comparison.
+7. The pre-meta-filter VGGT layer ablation suggested layer `20` as the best old representation, with layer `16` as the main outlier-sensitive comparison. This must be re-checked on the clean sequence-meta-filtered GT.
 
 ## Recommended Next Steps
 
-1. Use VGGT layer `20` as the default representation in the next SCRREAM adapter run.
-2. Compare layer `16` and layer `20` PLYs before making a qualitative visual claim.
+1. Use clean-GT VGGT layer `16` as the current default representation and layer `24` as the closest comparison point.
+2. Compare the clean-GT layer `16` and `24` PLYs before making a qualitative visual claim.
 3. Expand SCRREAM training pairs beyond the current 329 official pairs.
 4. Keep `trainplus_test` for fitting experiments, but regenerate a clean held-out split before making any final claim.
-5. Run a controlled density ablation after the layer-20 baseline is established:
+5. Run a controlled density ablation after the layer-16 baseline is established:
    - same split;
    - same layer;
    - same steps;
    - compare 10k vs 20k vs possibly 40k if memory permits.
 6. Test more adapter/model variants after the data-scale question is addressed.
-7. Test a precision-aware auxiliary only after the layer-20 baseline is stable:
+7. Test a precision-aware auxiliary only after the layer-16 baseline is stable:
    - trimmed Chamfer;
    - stronger pred-to-GT penalty;
    - outlier clipping / bounded radius penalty.
@@ -626,4 +628,4 @@ The honest read of all experiments so far is:
 
 The project is past the data-bridge stage: full SCRREAM mesh-complete data generation and MLP adapter training now run successfully. The SCRREAM data bridge is V0.5: it is wired end to end and visually plausible, but still needs larger training scale and broader model coverage.
 
-The current completed VGGT probe baseline uses layer `20`, which achieved `val_fscore_tau_0.10=0.672747712053826` on the 12-sample scene08 val split. This is the best current starting point for the next phase, but not yet a final claim: the next direction is to increase SCRREAM training data scale and test more model variants while keeping robust metrics and `val_visual_40960/` inspection enabled.
+The pre-meta-filter completed VGGT probe baseline used layer `20`, which achieved `val_fscore_tau_0.10=0.672747712053826` on the 12-sample scene08 val split. After the 2026-05-11 sequence-meta GT correction, this is a historical comparison point rather than the current default. The clean-GT rerun now favors layer `16` (`best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`), with layer `24` close on F-score. WAN Route2 job `86307` later completed; best WAN (`t499/layer09`, `F@0.10=0.46988987902779306`) remained far below clean-GT VGGT. The next direction is WAN Route2.1 (`no_noise` / `low_noise` layers `9,14,29`, plus `t499/layer09 + norm`), then SCRREAM training data scale expansion while keeping robust metrics and `val_visual_40960/` inspection enabled.

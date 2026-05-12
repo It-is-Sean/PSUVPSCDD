@@ -1,6 +1,6 @@
 # NOVA3R 3D Probe
 
-## Current status override — 2026-05-07
+## Current status override — 2026-05-12
 
 The active probe state has moved to the corrected full SCRREAM branch. Important current constraints:
 
@@ -10,9 +10,11 @@ The active probe state has moved to the corrected full SCRREAM branch. Important
 - use fixed-sample robust eval / videos before launching new adapter claims;
 - treat old `eval_scrream` runs as invalid for claims because they used the released eval subset;
 - use the downloaded full SCRREAM tree at `~/datasets/SCRREAM` for the corrected branch;
-- default SCRREAM full-data target source is now registered mesh-complete, not dense depth aggregation;
+- default SCRREAM full-data target source is now sequence-filtered registered mesh-complete, not dense depth aggregation;
 - submit long data-prep and training work through `slurm/`; Slurm logs go to `slurm_out/`.
-- job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; inspect its metrics and exported PLYs before making any SCRREAM adapter claim.
+- job `86140` completed the pre-meta-filter 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; treat it as historical after the sequence-meta GT correction.
+- job `86286` completed the VGGT layer ablation on clean sequence-meta-filtered GT under `*robustval_metafilter_seed17_vggt_layerXX`; VGGT layer `16` is the current default, with layer `24` as the main comparison point.
+- WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 runs. Best WAN is `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT, so treat the branch as exploratory and setting-sensitive.
 - initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`.
 
 
@@ -30,16 +32,16 @@ That package is the released **evaluation subset** (~1.6 GB on the current machi
 
 ## SCRREAM-full mesh-complete adapter bridge
 
-For the full SCRREAM layout at `~/datasets/SCRREAM`, use `prepare_scrream_full_adapter_data.py` with `--target_source mesh_complete`. This path reads the official two-view pair list, uses the two RGB frames as adapter inputs, samples registered scene meshes, crops the complete point cloud to the selected input-pair union frustum, and stores fixed-size target point clouds in the first input view coordinate frame.
+For the full SCRREAM layout at `~/datasets/SCRREAM`, use `prepare_scrream_full_adapter_data.py` with `--target_source mesh_complete`. This path reads the official two-view pair list, uses the two RGB frames as adapter inputs, reads the current sequence `meta.txt`, samples only the listed registered scene meshes, crops the complete point cloud to the selected input-pair union frustum, and stores fixed-size target point clouds in the first input view coordinate frame.
 
 Current target semantics:
 
 - pair list: `data/scrream/scrream_n2_list.json`
 - input images: the two pair frames, for example `scene09/scene09_full_00 200 275`
-- mesh source: `sceneXX/meshes/*.obj`
-- mesh sampling: surface-area proportional across all OBJ files in a scene
-- cache: per-scene mesh reservoirs under `experiments/probe3d/adapter_data/mesh_cache/`
-- frustum crop: keep mesh points visible in at least one selected input view with positive depth
+- mesh source: `sceneXX/meshes/*.obj` filtered by the current sequence `meta.txt`
+- mesh sampling: surface-area proportional across the selected sequence object meshes
+- cache: sequence/object-set mesh reservoirs under `experiments/probe3d/adapter_data/mesh_cache/`
+- frustum crop: keep mesh points inside at least one selected input-view frustum with positive depth
 - target frame: first input camera coordinates
 - final target: deterministic FPS to the requested target count, with replacement padding only when the crop is undersized
 - output schema: `scene_ids`, `target_points`, `splits`, `metadata`, and global `meta`
@@ -47,6 +49,63 @@ Current target semantics:
 The earlier equal-points-per-OBJ preview under `scrream_mesh_complete_n2_preview/` underweighted room-scale surfaces. The accepted current preview uses area-proportional sampling and lives under:
 
 - `experiments/probe3d/adapter_data/scrream_mesh_complete_area_n2_preview/`
+
+## SCRREAM WAN-T2V video-context probe
+
+The WAN route2 probe keeps the current SCRREAM N2 adapter data and mesh-complete GT unchanged, but replaces VGGT features with precomputed WAN2.1 T2V features. This is a **video-context** representation: each two-view pair is embedded by loading WAN T2V on an 81-frame RGB window around the pair, then keeping only the two temporal slices corresponding to the original pair frames. Adapter training reads the cached WAN features and does not run WAN inside every training step.
+
+Route2 defaults:
+
+- model: `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`
+- local checkpoint: `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers`
+- timesteps: `249,499,749`
+- code layer ids: `9,14,19,24,29` (human layers 10/15/20/25/30)
+- cache shape per sample: `[3120,1536]`
+- network proxy for repo/checkpoint fetches: `http://127.0.0.1:17890`
+
+On this Slurm cluster the `17890` proxy is bound to login-node loopback. WAN Slurm jobs therefore open an SSH local tunnel from the compute node back to `air-server:127.0.0.1:17890`, then export `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` to the compute node's local forwarded port. Override with `WAN_PROXY_SSH_HOST`, `WAN_PROXY_REMOTE_PORT`, `WAN_PROXY_LOCAL_PORT`, or set `WAN_DISABLE_PROXY=1`.
+
+WAN-specific Python dependencies are isolated in `experiments/probe3d/requirements-wan-t2v.txt`. They are not merged into the root environment files. Job `slurm/scrream_wan_t2v_download.sbatch` installs/validates them by default before downloading the checkpoint.
+
+Status on `2026-05-12 16:32 CST`: the WAN checkpoint is present under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB). Full feature precompute completed as jobs `86292`, `86293`, and `86294`; cache root `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81` contains `4937` `.pt` files / about `45G`. The first full training pack `86306` failed immediately on a final-loss scalar bug, `train_wan_t2v_nova_adapter.py` was patched, and replacement pack job `86307` completed all 15 runs on `air-node-04`, exit `0:0`, elapsed `13:36:04`.
+
+Route2 result:
+
+- best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+- clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+- next Route2.1 audit: add `no_noise` / `low_noise` WAN cache modes for layers `9,14,29`, plus a targeted `t499/layer09 + norm` setting
+- deferred WAN settings: `pair_tiled81` vs `ctx81`, I2V/FLF2V conditioning, and broader feature-normalization / adapter sweeps
+
+Download/preflight WAN dependencies and checkpoint:
+
+```bash
+sbatch slurm/scrream_wan_t2v_download.sbatch
+```
+
+Validate all SCRREAM pair windows without loading WAN:
+
+```bash
+WAN_WINDOW_ONLY=1 sbatch slurm/scrream_wan_t2v_precompute.sbatch
+```
+
+Feature smoke:
+
+```bash
+WAN_TIMESTEPS=749 WAN_LAYERS=20 WAN_MAX_SAMPLES=2 \
+  sbatch slurm/scrream_wan_t2v_precompute.sbatch
+```
+
+Full feature cache:
+
+```bash
+sbatch slurm/scrream_wan_t2v_precompute.sbatch
+```
+
+Full 15-run adapter ablation:
+
+```bash
+sbatch slurm/scrream_wan_t2v_ablation_pack_train.sbatch
+```
 
 Run these commands from the `nova3r` conda environment.
 
@@ -91,9 +150,11 @@ Generated formal datasets now available locally:
   - `mesh_sample_points=500000`
   - split `train=223`, `val=12`, `test=94`
 - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
-  - split `train=317`, `val=12`
+  - split `train=317`, `val=12`, `mesh_sequence_meta_filter=True`
 
 The `trainplus_test` files rewrite split labels only: `test` becomes `train`, and `val` is preserved. They have no held-out test split.
+
+The 20k / 500k data was regenerated on `2026-05-10` with sequence-level object filtering from each sequence `meta.txt`. Old pre-meta-filter `.pt` files were moved to `experiments/probe3d/adapter_data/deprecated_meta_filter_bug/`. The corresponding mesh cache now uses sequence/meta-hash labels such as `scene08_scene08_reduced_00_meta7c4e1a9bf084_...npz`, so it no longer reuses scene-level all-object reservoirs.
 
 Training smoke after a smoke `.pt` exists:
 
@@ -130,6 +191,16 @@ sbatch --qos=high --nodelist=air-node-02 --gres=gpu:a100:1 --mem=32G \
 
 This submitted job `86140`, which completed on `air-node-02` with exit `0:0`, elapsed `00:26:26`, and Slurm end time `2026-05-07 22:40:22 CST`.
 
+Important: job `86140` and the old robust VGGT layer ablation job `86149` used the pre-meta-filter GT. The clean-GT rerun is completed Slurm job `86286`, with output prefix:
+
+- `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_vggt_layerXX`
+
+Current clean-GT VGGT ranking:
+
+- layer `16`: current default, `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+- layer `24`: main comparison point, `best_val_fscore_tau_0.10=0.6802513448244976`, `best_val_pred_to_gt_p90=0.25152526050806046`, `best_val_chamfer_l2=0.03554012098660072`
+- layer `20`: no longer the clean-GT default, `best_val_fscore_tau_0.10=0.548158719135383`
+
 Completed run artifacts:
 
 - output: `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17`
@@ -141,7 +212,7 @@ Future multi-GPU follow-up runs should use the script's DDP path:
 
 ```bash
 SCRREAM_GPUS_PER_NODE=4 \
-SCRREAM_EPOCHS=30 \
+SCRREAM_EPOCHS=50 \
 SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt \
 SCRREAM_OUTPUT_DIR=experiments/probe3d/result/<new-run-name> \
 SCRREAM_FEATURE_CACHE_DIR=experiments/probe3d/feature_cache/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_vggt23 \

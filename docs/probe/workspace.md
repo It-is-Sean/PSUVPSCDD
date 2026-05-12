@@ -26,7 +26,7 @@ This is the cleaner research layer for running the shared complete-3D decoding a
 ### 3. Collaborator-side direct experiment path
 - `experiments/probe3d/`
 
-This contains the more concrete and fast-moving probe experiments, especially the VGGT/NOVA adapter work.
+This contains the more concrete and fast-moving probe experiments, especially the VGGT/NOVA and WAN/NOVA adapter work.
 
 ## Third-party dependencies
 
@@ -39,7 +39,20 @@ Initialize it before adapter training; an empty submodule checkout causes `Modul
 ### Wan2.1
 - `third_party/Wan2.1/`
 
-Submodule for `Wan-Video/Wan2.1`. Its dependencies are not merged into the root `requirements.txt` or `environment.yml`; prepare a separate environment from `third_party/Wan2.1/requirements.txt` before running Wan-specific code.
+Submodule for `Wan-Video/Wan2.1`. Its dependencies are not merged into the root `requirements.txt` or `environment.yml`.
+
+For the SCRREAM WAN Route2 probe, use the isolated dependency file in the existing `nova3r` environment:
+
+```bash
+pip install -r experiments/probe3d/requirements-wan-t2v.txt
+```
+
+The WAN Route2 training path does not import Wan2.1 during every adapter step. WAN is loaded during feature precompute, writes cached `[3120,1536]` feature tensors, and `experiments/probe3d/train_wan_t2v_nova_adapter.py` trains from those cache files.
+
+### VidFM3D
+- `third_party/VidFM3D/`
+
+Submodule for `zxhuang1698/VidFM3D`, used as a reference for WAN feature extraction conventions. The current project does not import VidFM3D's Lightning training stack.
 
 After a fresh clone, initialize third-party submodules with:
 
@@ -70,3 +83,4 @@ These are not vendored into git and should stay local/runtime-provided:
 - If you want the **latest concrete adapter experiments**, go straight to `experiments/probe3d/`.
 - If you need third-party model code, look in `third_party/` before reaching outside the repo.
 - If you need the current SCRREAM run state, read `docs/probe/handoff_2026-05-07.md`.
+- If you need WAN Route2 execution state, read the `2026-05-12`, `2026-05-11`, and `2026-05-10` update sections in `docs/probe/handoff_2026-05-07.md`.

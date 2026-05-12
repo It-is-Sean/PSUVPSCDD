@@ -1,6 +1,6 @@
 # Probe Docs
 
-## Current canonical status — 2026-05-07
+## Current canonical status — 2026-05-12
 
 For the latest project state, read:
 
@@ -14,26 +14,49 @@ Key corrections:
 - CD-only and two-sample oracle results are not claim-level evidence. Use fixed-sample robust metrics and visual audits.
 - The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
 - The old local `eval_scrream` branch is invalid for claims, but full SCRREAM is now downloaded at `~/datasets/SCRREAM`.
-- The active branch is SCRREAM full-data mesh-complete adapter training.
+- The active baseline branch is SCRREAM full-data mesh-complete VGGT adapter training on sequence-meta-filtered clean GT.
+- The active model-coverage branch is SCRREAM WAN2.1 T2V Route2, which keeps the VGGT ablation's data/GT/split/adapter/decoder/validation fixed and changes only the representation. Slurm job `86307` completed the full 15-run ablation pack; best WAN is `t499/layer09`, above zero/sample-shuffle controls but far below clean-GT VGGT. Treat the route as exploratory / setting-sensitive, and audit `no_noise` / `low_noise` plus one `t499/layer09 + norm` setting next.
 - Long data generation and training should use `slurm/` scripts with logs in `slurm_out/`.
 - Slurm job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; `final_metrics.json` reports `best_val_chamfer_l2=0.5149603486061096`.
+- Slurm job `86149` completed the robust VGGT layer ablation on `2026-05-08`, but it used the pre-meta-filter GT and is now historical. Clean-GT VGGT ablation job `86286` completed successfully; the current default is layer `16`, with layer `24` as the main comparison point.
 - NOVA `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; SwanLab is installed in `nova3r`.
-- VGGT and Wan2.1 are Git submodules under `third_party/`; initialize them with `git submodule update --init --recursive`.
+- VGGT, Wan2.1, and VidFM3D are Git submodules under `third_party/`; initialize them with `git submodule update --init --recursive`.
+- WAN Route2 uses proxy `http://127.0.0.1:17890` through compute-node SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`; non-WAN jobs keep the `7896` proxy default.
 
 This folder records the proposal-facing execution state for the current adapter / decoder experiments.
 
 ## Read this first
 
 ### 1. What is active now?
-The current active formal branch is the **SCRREAM full-data mesh-complete adapter line**.
+The current active formal data/GT line is the **SCRREAM full-data mesh-complete adapter line**.
 
 It is:
 - a corrected rerun of the SCRREAM adapter idea using the full dataset at `~/datasets/SCRREAM`
-- based on registered SCRREAM scene meshes, not the invalid `eval_scrream` subset
+- based on sequence-meta-filtered registered SCRREAM scene meshes, not the invalid `eval_scrream` subset
 - constrained to the selected two-input-view union frustum
 - launched through Slurm scripts in `slurm/`
 
-It is **not** a claim yet. Full `.pt` generation is complete for both 10k and 20k target variants, and the first 20k / 500k MLP baseline has completed. The current formal data file is `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`, which has `train=317` and `val=12`; the next required step is visual / metric inspection of job `86140` outputs.
+Full `.pt` generation is complete for both 10k and 20k target variants. The current formal data file is `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`, which has `train=317`, `val=12`, and `mesh_sequence_meta_filter=True`. The previous 20k / 500k MLP baseline and VGGT layer ablation were run before the sequence-level object filter; use them as historical diagnostics, not final clean-GT claims.
+
+The clean-GT VGGT layer ablation completed as Slurm job `86286`. The current default VGGT layer is `16` (`best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`); layer `24` is the closest comparison point.
+
+The next active experiment branch is **WAN2.1 T2V Route2.1**. It keeps the same SCRREAM `.pt`, mesh-complete GT, split, MLP-L4 adapter, NOVA decoder, and robust validation as the completed Route2 grid, but changes the feature extraction setting first.
+
+WAN Route2 entrypoints:
+
+- dependency pins: `../../experiments/probe3d/requirements-wan-t2v.txt`
+- feature cache: `../../experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py`
+- training: `../../experiments/probe3d/train_wan_t2v_nova_adapter.py`
+- Slurm: `../../slurm/scrream_wan_t2v_download.sbatch`, `../../slurm/scrream_wan_t2v_precompute.sbatch`, `../../slurm/scrream_wan_t2v_ablation_pack_train.sbatch`
+
+Status on `2026-05-12 16:32 CST`: the WAN checkpoint is present under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers`. Full WAN feature precompute completed as jobs `86292`, `86293`, and `86294`, writing `4937` `.pt` files / about `45G`. Training pack job `86307` completed on `air-node-04`, exit `0:0`, elapsed `13:36:04`.
+
+Route2 result:
+
+- best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+- clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+- next Route2.1 audit: layers `9,14,29` with `no_noise` and `low_noise` cache modes, then one targeted `t499/layer09 + norm` setting
+- deferred WAN settings: `pair_tiled81` vs `ctx81`, I2V/FLF2V conditioning, and broader normalization / adapter sweeps
 
 ### 2. What about ScanNet?
 The ScanNet v2 mesh-first line remains the diagnostic baseline.

@@ -1,16 +1,18 @@
 # Experiment plan from the current state
 
-## Current plan override — 2026-05-07
+## Current plan override — 2026-05-12
 
 Older phase labels below remain useful history, but the next valid plan is now:
 
 1. **Use full SCRREAM, not `eval_scrream`.** The old local SCRREAM subset remains invalid for claims. The corrected branch uses `~/datasets/SCRREAM`.
-2. **Use mesh-complete SCRREAM targets first.** The current default GT source is registered scene meshes sampled proportional to surface area, cropped to the selected two-view union frustum, and stored in the first input camera frame.
+2. **Use sequence-filtered mesh-complete SCRREAM targets first.** The current default GT source reads the current sequence `meta.txt`, samples only the listed registered scene meshes proportional to surface area, crops to the selected two-view union frustum, and stores targets in the first input camera frame.
 3. **Launch through Slurm.** Data generation and training scripts live in `slurm/`; logs go to `slurm_out/`.
-4. **Current formal run.** The 20k / 500k `trainplus_test` adapter data is generated, and job `86140` completed the MLP baseline on `air-node-02` with exit `0:0`.
-5. **Train the MLP baseline before method sprawl.** Current baseline is `adapter_type=mlp`, `adapter_layers=4`, `adapter_hidden_dim=1024`, `loss_type=nova_flow`, `num_queries=20000`.
-6. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
-7. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
+4. **Clean GT regeneration completed.** Slurm jobs `86283` and `86284` regenerated the 20k / 500k `trainplus_test` adapter data with `mesh_sequence_meta_filter=True`.
+5. **Clean-GT VGGT rerun completed.** The previous job `86149` is pre-meta-filter history. Clean-GT job `86286` completed successfully; use VGGT layer `16` as the current default and layer `24` as the main comparison point.
+6. **WAN Route2 completed and is setting-limited.** Keep SCRREAM data, mesh-complete GT, split, MLP adapter, NOVA decoder, and robust validation matched to the clean-GT VGGT ablation; replace only the representation with cached WAN2.1 T2V video-context features. Full feature precompute and 15-run training pack `86307` completed. Best WAN (`t499/layer09`) is above zero/sample-shuffle controls but still far weaker than clean-GT VGGT.
+7. **Next WAN audit is Route2.1.** First test whether noisy T2V denoising states are the problem: implement `no_noise` / `low_noise` cache modes for layers `9,14,29`, plus one targeted `t499/layer09 + norm` setting. Defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps.
+8. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
+9. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
 
 This plan is intentionally short and tied to what is already real in the repo.
 
@@ -129,11 +131,12 @@ GT construction:
 
 1. read official two-view pairs from `data/scrream/scrream_n2_list.json`
 2. use the two RGB frames as adapter inputs
-3. sample `sceneXX/meshes/*.obj` surfaces proportional to surface area
-4. voxel-deduplicate and cache a per-scene mesh reservoir
-5. crop points to the union frustum of the two input views
-6. transform the target to the first input camera coordinate frame
-7. FPS sample or pad to the requested target count
+3. read the current sequence `meta.txt` and select only listed registered `sceneXX/meshes/*.obj` surfaces
+4. sample selected mesh surfaces proportional to surface area
+5. voxel-deduplicate and cache a per-sequence/object-set mesh reservoir
+6. crop points to the union frustum of the two input views
+7. transform the target to the first input camera coordinate frame
+8. FPS sample or pad to the requested target count
 
 Completed baseline:
 
@@ -166,7 +169,7 @@ Future follow-up runs should use the multi-GPU Slurm path when idle GPUs are ava
 
 ```bash
 SCRREAM_GPUS_PER_NODE=4 \
-SCRREAM_EPOCHS=30 \
+SCRREAM_EPOCHS=50 \
 SCRREAM_ADAPTER_DATA=experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt \
 SCRREAM_OUTPUT_DIR=experiments/probe3d/result/<new-run-name> \
 SCRREAM_FEATURE_CACHE_DIR=experiments/probe3d/feature_cache/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_vggt23 \
@@ -174,6 +177,62 @@ SCRREAM_NUM_QUERIES=20000 \
 sbatch --qos=high --nodelist=<node-with-free-a100s> --gres=gpu:a100:4 --mem=96G \
   slurm/scrream_mesh_complete_mlp_train.sbatch
 ```
+
+## Phase 6b — WAN2.1 T2V Route2 representation probe
+
+Goal: compare WAN2.1 T2V video-context features against the clean-GT VGGT rerun without changing the training problem. The completed job `86149` is only pre-meta-filter history; the active VGGT comparison is clean-GT layer `16` plus layer `24`.
+
+Fixed SCRREAM setting:
+
+1. adapter data: `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`
+2. split: `train=317`, `val=12`
+3. GT: sequence-meta-filtered registered SCRREAM mesh-complete surface points, `target_points=20000`, `mesh_sample_points=500000`, union-frustum crop, first input camera frame
+4. adapter: `MLP-L4`, hidden dim `1024`
+5. loss: `nova_flow`
+6. decoder: NOVA `scene_ae`
+7. validation: robust metrics over full val split, `val_visual_40960/` previews
+
+WAN representation:
+
+1. model: `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`
+2. prompt: empty string
+3. context: 81 RGB frames centered/clamped around the SCRREAM pair
+4. timesteps: `249,499,749`
+5. code layers: `9,14,19,24,29`
+6. cached feature shape: `[3120,1536]` per sample / timestep / layer
+
+Execution plan:
+
+1. checkpoint download/preflight is complete under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers`
+2. 2-sample feature smoke is complete for `WAN_TIMESTEPS=749 WAN_LAYERS=20 WAN_MAX_SAMPLES=2`
+3. full 15-grid feature precompute completed through `slurm/scrream_wan_t2v_precompute.sbatch` as jobs `86292`, `86293`, and `86294`
+4. training pack attempt `86306` failed immediately on scalar final-loss reporting; `train_wan_t2v_nova_adapter.py` was fixed
+5. replacement 15-grid training pack `86307` completed through `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`, exit `0:0`, elapsed `13:36:04`
+6. best WAN Route2 result is `t499/layer09`: `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+7. clean-GT VGGT layer `16` remains much stronger: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+8. next audit before changing the conclusion: `no_noise` / `low_noise` feature modes for layers `9,14,29`, plus one targeted `t499/layer09 + norm` setting
+
+WAN repo/checkpoint network jobs use proxy `http://127.0.0.1:17890` through the compute-node SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`. The checkpoint, 2-sample feature smoke, window validation, and full cache generation have completed.
+
+### Phase 6c — WAN Route2.1 setting audit
+
+Goal: test whether current Route2 is weak because it probes noisy T2V denoising hidden states rather than clean visual-condition features.
+
+Immediate settings:
+
+1. feature modes:
+   - `no_noise`: encode the 81-frame video with the WAN VAE and run the transformer on the clean latent while still passing a controlled timestep embedding;
+   - `low_noise`: use genuinely low-noise scheduler positions;
+2. metadata must record both the requested `t_index` and actual scheduler timestep / sigma, because the current `249/499/749` values are scheduler indices rather than guaranteed raw noise levels;
+3. layers: `9,14,29`;
+4. training: short probes first, same SCRREAM `.pt`, same `train=317` / `val=12`, same MLP-L4, same NOVA decoder, full robust validation and `val_visual_40960/`;
+5. normalization check: run one targeted `t499/layer09 + norm` setting against the existing best WAN route.
+
+Deferred settings:
+
+1. `pair_tiled81` versus `ctx81`;
+2. I2V / FLF2V conditioning;
+3. broader feature normalization / adapter-capacity sweeps.
 
 ## Phase 7 — Proposal-facing interpretation
 

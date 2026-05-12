@@ -1,13 +1,13 @@
 # TODO
 
-## Active now — 2026-05-09
+## Active now — 2026-05-12
 
 ### SCRREAM full mesh-complete adapter line
 - [x] download full SCRREAM to `~/datasets/SCRREAM`
 - [x] confirm the old `eval_scrream` subset must not be used for formal claims
 - [x] add `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py`
 - [x] add `--target_source mesh_complete`
-- [x] sample SCRREAM scene meshes with surface-area-proportional budgets
+- [x] sample sequence-selected SCRREAM scene meshes with surface-area-proportional budgets
 - [x] crop mesh-complete targets to the selected two-view union frustum
 - [x] store adapter targets in the first input camera frame
 - [x] verify a scene09 mesh-complete area-proportional PLY preview
@@ -34,11 +34,17 @@
 - [x] implement robust validation metrics and `val_visual_40960/` exports
 - [x] run packed VGGT layer ablation as Slurm job `86149`
 - [x] confirm job `86149` completed successfully with exit `0:0`
-- [x] identify VGGT layer `20` as the current default probe layer
+- [x] record pre-meta-filter VGGT layer `20` as the historical best layer before the sequence-meta GT correction
 - [x] record robust layer-ablation results in the handoff docs
-- [ ] inspect layer `16` vs layer `20` visual PLYs before making a qualitative SCRREAM claim
+- [x] identify and fix sequence-level phantom object contamination in SCRREAM mesh-complete GT
+- [x] regenerate 20k / 500k adapter data with `mesh_sequence_meta_filter=True` as Slurm jobs `86283` and `86284`
+- [x] archive old pre-meta-filter `.pt` files under `experiments/probe3d/adapter_data/deprecated_meta_filter_bug/`
+- [x] launch clean-GT VGGT layer rerun as Slurm job `86286`
+- [x] confirm job `86286` completed successfully with exit `0:0`
+- [x] record clean-GT VGGT layer `16` as the current default and layer `24` as the main comparison point
+- [ ] inspect clean-GT layer `16` vs layer `24` visual PLYs before making a qualitative claim
 - [ ] expand SCRREAM training data scale beyond the current 329 official pairs
-- [ ] test more adapter/model variants after the layer-20 baseline is established
+- [ ] test more adapter/model variants after the clean-GT VGGT baseline is established
 
 ### Current execution convention
 - [x] use conda env `nova3r`
@@ -48,9 +54,42 @@
 - [x] use SwanLab by default for the formal SCRREAM MLP Slurm script unless `SCRREAM_SWANLAB=0`
 - [x] keep SwanLab API key in ignored local `slurm/.secrets.env`
 - [x] use `SCRREAM_GPUS_PER_NODE` + `SCRREAM_EPOCHS` for future multi-GPU Slurm training
+- [x] change formal SCRREAM VGGT/WAN ablation defaults from 30 epochs to 50 epochs
 - [x] ignore `scrream_official_depth_mix_*` artifacts unless explicitly running a depth-mix ablation
 - [x] keep robust validation and `val_visual_40960/` enabled for formal runs
 - [x] add project-level VSCode exclusions so large result/cache/checkpoint directories remain visible but are not watched/searched/indexed
+
+### SCRREAM WAN2.1 T2V Route2 probe
+- [x] add `third_party/VidFM3D` as a reference submodule
+- [x] keep WAN/VidFM3D dependencies out of the root `requirements.txt` and `environment.yml`
+- [x] add isolated dependency pins in `experiments/probe3d/requirements-wan-t2v.txt`
+- [x] add WAN feature cache generator at `experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py`
+- [x] add separate WAN training entrypoint at `experiments/probe3d/train_wan_t2v_nova_adapter.py`
+- [x] keep `train_vggt_nova_adapter.py` as the VGGT entrypoint
+- [x] update shared adapter helpers so trainable-parameter checks allow `vggt=None`
+- [x] add WAN Slurm scripts under `slurm/`
+- [x] route WAN repo/checkpoint jobs through `http://127.0.0.1:17890`
+- [x] add compute-node SSH tunnel fallback to `air-server:127.0.0.1:17890` for WAN Slurm scripts
+- [x] validate WAN import/dependency preflight in conda env `nova3r`
+- [x] validate all `329` SCRREAM samples can build legal 81-frame WAN windows without loading WAN
+- [x] submit WAN checkpoint download/preflight job `86267`
+- [x] confirm local checkpoint is complete under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers`
+- [x] run 2-sample WAN feature smoke with `WAN_TIMESTEPS=749 WAN_LAYERS=20 WAN_MAX_SAMPLES=2` as job `86282`
+- [x] run full WAN feature precompute for timesteps `249,499,749` and code layers `9,14,19,24,29` as jobs `86292`, `86293`, and `86294`
+- [x] run WAN feature-sensitivity sanity and zero/sample-shuffle controls as job `86316`
+- [x] fix the WAN training final-loss scalar bug exposed by failed pack job `86306`
+- [x] launch replacement full WAN Route2 ablation pack as job `86307`
+- [x] confirm job `86307` finished all 15 runs: timesteps `249,499,749` x code layers `9,14,19,24,29`
+- [x] compare WAN Route2 results against clean-GT VGGT layer `16` and layer `24`
+- [x] record best WAN Route2 as `t499/layer09` and interpret the current route as setting-limited rather than claim-level
+- [ ] implement WAN Route2.1 `no_noise` cache mode and record actual scheduler timestep / sigma metadata
+- [ ] implement WAN Route2.1 `low_noise` cache mode and record actual scheduler timestep / sigma metadata
+- [ ] precompute Route2.1 features for layers `9,14,29` under `no_noise` and `low_noise`
+- [ ] run short Route2.1 adapter probes for layers `9,14,29` under `no_noise` and `low_noise`
+- [ ] run targeted `t499/layer09 + norm` setting to test feature-scale / feature-normalization effects
+- [ ] defer `pair_tiled81` vs `ctx81` until after Route2.1
+- [ ] defer I2V / FLF2V conditioning until after Route2.1
+- [ ] defer broader normalization / adapter-capacity sweeps until after Route2.1
 
 ## Deferred after SCRREAM baseline
 

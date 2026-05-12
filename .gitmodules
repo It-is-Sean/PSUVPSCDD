@@ -6,3 +6,7 @@
 	path = third_party/Wan2.1
 	url = https://github.com/Wan-Video/Wan2.1.git
 	branch = main
+[submodule "third_party/VidFM3D"]
+	path = third_party/VidFM3D
+	url = https://github.com/zxhuang1698/VidFM3D.git
+	branch = main

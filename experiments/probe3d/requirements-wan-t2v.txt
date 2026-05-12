@@ -1,0 +1,9 @@
+# Extra dependencies for SCRREAM WAN-T2V feature extraction only.
+# Keep these separate from the root nova3r requirements to avoid changing
+# existing VGGT/NOVA adapter training environments unexpectedly.
+transformers>=4.49.0,<5.0
+tokenizers>=0.20.3,<0.23
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+ftfy>=6.2.0
+huggingface-hub[cli]>=0.34,<1.0

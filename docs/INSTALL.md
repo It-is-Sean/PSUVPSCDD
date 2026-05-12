@@ -41,8 +41,16 @@ Current submodules:
 
 - `third_party/vggt` -> `https://github.com/facebookresearch/vggt.git`
 - `third_party/Wan2.1` -> `https://github.com/Wan-Video/Wan2.1.git`
+- `third_party/VidFM3D` -> `https://github.com/zxhuang1698/VidFM3D.git`
 
-Wan2.1 is source-only for now. Its dependencies are intentionally not merged into the root environment; use `third_party/Wan2.1/requirements.txt` in a separate environment before running Wan-specific code.
+Wan2.1 and VidFM3D dependencies are intentionally not merged into the root `requirements.txt` or `environment.yml`. The SCRREAM WAN Route2 probe uses the current `nova3r` environment plus the isolated dependency file below:
+
+```bash
+conda activate nova3r
+pip install -r experiments/probe3d/requirements-wan-t2v.txt
+```
+
+This keeps the VGGT/NOVA adapter environment stable while adding only the WAN T2V feature-extraction requirements (`transformers`, `tokenizers`, `sentencepiece`, `protobuf`, `ftfy`, and `huggingface-hub[cli]`).
 
 The workflow is driven by:
 
@@ -121,13 +129,16 @@ cd ../../
 bash scripts/download_checkpoints.sh
 ```
 
-Current local research-workspace state on 2026-05-07:
+Current local research-workspace state on 2026-05-12:
 
 - `checkpoints/scene_n1/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/scene_ae/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/vggt/model.pt` is present.
-- Proxy `http://127.0.0.1:7896` was the working route for checkpoint / HuggingFace access on this machine.
+- WAN checkpoint target `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` is present locally (~27 GB); future downloads/preflight are handled by `slurm/scrream_wan_t2v_download.sbatch`.
+- Proxy `http://127.0.0.1:7896` is the working non-WAN route for checkpoint / HuggingFace access on this machine.
+- WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890`; the WAN Slurm scripts create a compute-node SSH tunnel back to `air-server:127.0.0.1:17890` by default.
+- WAN sanity job `86316` and full Route2 pack job `86307` completed; the route is non-degenerate, but best WAN (`t499/layer09`) remains well below the clean-GT VGGT baseline.
 - `swanlab==0.7.16` is installed and importable in conda env `nova3r`.
 
 ### 8. Verify

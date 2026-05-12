@@ -25,13 +25,14 @@ Important distinction:
 - `datasets/eval_scrream` is the released evaluation subset and must not be used as formal training data for the SCRREAM adapter branch.
 - The current full SCRREAM training tree used by the adapter work is staged locally at `~/datasets/SCRREAM`.
 - For the full tree, use `experiments/probe3d/scripts/prepare_scrream_full_adapter_data.py`; do not use the legacy LDI prep script unless the data explicitly contains `ldi/` and `*_ldi.npz`.
-- The current primary full-SCRREAM target source is `--target_source mesh_complete`, using registered `sceneXX/meshes/*.obj` assets cropped to the selected input-pair frustum.
+- The current primary full-SCRREAM target source is `--target_source mesh_complete`, using registered `sceneXX/meshes/*.obj` assets filtered by the current sequence `meta.txt` and cropped to the selected input-pair frustum.
 - Current generated mesh-complete adapter data includes:
   - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt` with shape `[329, 10000, 3]`
   - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_trainplus_test.pt` with split `train=317`, `val=12`
   - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000.pt` with shape `[329, 20000, 3]`
-  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt` with split `train=317`, `val=12`
+  - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt` with split `train=317`, `val=12`, `mesh_sequence_meta_filter=True`
 - The `trainplus_test` files have no held-out test split; they are for maximizing training data after the user explicitly asked to merge test pairs into train.
+- The current 20k / 500k files were regenerated on `2026-05-10` after removing stale scene-level mesh caches. Old pre-meta-filter files are archived under `experiments/probe3d/adapter_data/deprecated_meta_filter_bug/`.
 
 ### Directory structure after download
 
