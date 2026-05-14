@@ -23,7 +23,7 @@ Important corrections that override older sections below:
 8. **SCRREAM baseline status:** job `86140` completed the old 20k/500k SCRREAM mesh-complete MLP baseline, and job `86149` completed the pre-meta-filter robust VGGT layer ablation. A sequence-meta-filtered clean GT was regenerated on `2026-05-10`; clean-GT VGGT job `86286` completed successfully on `2026-05-11`. The current clean-GT default is VGGT layer `16`, with layer `24` as the main comparison point.
 9. **Local weights:** NOVA3R `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; non-WAN Slurm scripts default network proxy variables to `http://127.0.0.1:7896`.
 10. **Third-party source:** VGGT, Wan2.1, and VidFM3D are Git submodules under `third_party/`; run `git submodule update --init --recursive` after a fresh clone. Wan2.1 / WAN probe dependencies stay separate from the root env.
-11. **WAN Route2 status:** the active representation probe is WAN2.1 T2V video-context features on the same clean SCRREAM `.pt`, split, MLP adapter, NOVA decoder, and robust validation setup as the VGGT ablation. Slurm job `86307` completed the full 15-run ablation pack successfully; best WAN is `t499/layer09` with `F@0.10=0.46988987902779306`, which is above zero/sample-shuffle controls but far below clean-GT VGGT layer `16`. Treat the branch as exploratory and likely setting-sensitive. The next audit is Route2.1: `no_noise` / `low_noise` for layers `9,14,29`, plus a targeted `t499/layer09 + norm` setting. WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890` through the Slurm SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`.
+11. **WAN Route2 status:** the active representation probe is WAN2.1 T2V video-context features on the same clean SCRREAM `.pt`, split, MLP adapter, NOVA decoder, and robust validation setup as the VGGT ablation. Slurm job `86307` completed the full 15-run ablation pack successfully; best WAN is `t499/layer09` with `F@0.10=0.46988987902779306`, which is above zero/sample-shuffle controls but far below clean-GT VGGT layer `16`. Treat the branch as exploratory and likely setting-sensitive. Route2.1 is now implemented for `no_noise` / `low_noise` caches on layers `9,14,29`; the queued execution chain on `2026-05-12 22:47 CST` is `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359`. A targeted `t499/layer09 + norm` setting remains after that. WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890` through the Slurm SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`.
 
 This repository is currently a **research execution workspace** around a simple question:
 
@@ -118,7 +118,8 @@ WAN Route2 result:
 - best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
 - interpretation: WAN Route2 is live but setting-limited; current T2V noisy-denoising hidden states are not competitive geometry features under the fixed adapter setting
-- next audit: Route2.1 `no_noise` / `low_noise` for layers `9,14,29`, plus targeted `t499/layer09 + norm`; defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps
+- next audit already queued: Route2.1 `no_noise` / `low_noise` for layers `9,14,29`, via smoke/full-cache/train chain `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359`; after that run targeted `t499/layer09 + norm`
+- defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps
 
 ### 3. ScanNet v2 line
 
@@ -212,7 +213,7 @@ The practical near-term plan is:
 
 1. keep the old `eval_scrream` correction in mind and do not reuse those invalid claims
 2. use clean-GT VGGT layer `16` as the current default representation, with layer `24` as the closest comparison point
-3. implement the WAN Route2.1 audit: `no_noise` / `low_noise` cache modes for layers `9,14,29`, then a targeted `t499/layer09 + norm` training setting
+3. monitor and evaluate the queued WAN Route2.1 chain: `no_noise` / `low_noise` cache modes for layers `9,14,29`, then run the targeted `t499/layer09 + norm` training setting
 4. expand SCRREAM training sample scale beyond the current 329 official pairs after the Route2.1 audit
 5. keep the fixed-30 ScanNet metrics as a failure-mode baseline
 

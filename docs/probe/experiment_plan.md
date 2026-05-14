@@ -10,7 +10,7 @@ Older phase labels below remain useful history, but the next valid plan is now:
 4. **Clean GT regeneration completed.** Slurm jobs `86283` and `86284` regenerated the 20k / 500k `trainplus_test` adapter data with `mesh_sequence_meta_filter=True`.
 5. **Clean-GT VGGT rerun completed.** The previous job `86149` is pre-meta-filter history. Clean-GT job `86286` completed successfully; use VGGT layer `16` as the current default and layer `24` as the main comparison point.
 6. **WAN Route2 completed and is setting-limited.** Keep SCRREAM data, mesh-complete GT, split, MLP adapter, NOVA decoder, and robust validation matched to the clean-GT VGGT ablation; replace only the representation with cached WAN2.1 T2V video-context features. Full feature precompute and 15-run training pack `86307` completed. Best WAN (`t499/layer09`) is above zero/sample-shuffle controls but still far weaker than clean-GT VGGT.
-7. **Next WAN audit is Route2.1.** First test whether noisy T2V denoising states are the problem: implement `no_noise` / `low_noise` cache modes for layers `9,14,29`, plus one targeted `t499/layer09 + norm` setting. Defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps.
+7. **WAN Route2.1 is implemented and queued.** The code now supports `no_noise` / `low_noise` cache modes for layers `9,14,29`; queued Slurm chain `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359` covers cache smoke, full cache generation, smoke train, and the two formal packs. After those results land, run one targeted `t499/layer09 + norm` setting. Defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps.
 8. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
 9. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
 
@@ -210,7 +210,7 @@ Execution plan:
 5. replacement 15-grid training pack `86307` completed through `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`, exit `0:0`, elapsed `13:36:04`
 6. best WAN Route2 result is `t499/layer09`: `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 7. clean-GT VGGT layer `16` remains much stronger: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-8. next audit before changing the conclusion: `no_noise` / `low_noise` feature modes for layers `9,14,29`, plus one targeted `t499/layer09 + norm` setting
+8. next evidence before changing the conclusion: finish the queued Route2.1 `no_noise` / `low_noise` runs for layers `9,14,29`, then run one targeted `t499/layer09 + norm` setting
 
 WAN repo/checkpoint network jobs use proxy `http://127.0.0.1:17890` through the compute-node SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`. The checkpoint, 2-sample feature smoke, window validation, and full cache generation have completed.
 
@@ -220,13 +220,14 @@ Goal: test whether current Route2 is weak because it probes noisy T2V denoising 
 
 Immediate settings:
 
-1. feature modes:
-   - `no_noise`: encode the 81-frame video with the WAN VAE and run the transformer on the clean latent while still passing a controlled timestep embedding;
-   - `low_noise`: use genuinely low-noise scheduler positions;
-2. metadata must record both the requested `t_index` and actual scheduler timestep / sigma, because the current `249/499/749` values are scheduler indices rather than guaranteed raw noise levels;
+1. implemented feature modes:
+   - `no_noise`: encode the 81-frame video with the WAN VAE and run the transformer on the clean latent while still passing the low-noise timestep embedding at scheduler index `999`;
+   - `low_noise`: add scheduler noise at index `999` and use the matching low-noise timestep embedding;
+2. cache metadata records `noise_mode`, `requested_timestep_index`, `scheduler_timestep`, `latent_noise_applied`, and `low_noise_index`, because the current `249/499/749` values are scheduler indices rather than guaranteed raw noise levels;
 3. layers: `9,14,29`;
-4. training: short probes first, same SCRREAM `.pt`, same `train=317` / `val=12`, same MLP-L4, same NOVA decoder, full robust validation and `val_visual_40960/`;
-5. normalization check: run one targeted `t499/layer09 + norm` setting against the existing best WAN route.
+4. execution chain queued on `2026-05-12 22:47 CST`: cache smokes `86342` / `86343`, dependent full caches `86350` / `86351`, smoke train `86357`, formal packs `86358` / `86359`;
+5. training: same SCRREAM `.pt`, same `train=317` / `val=12`, same MLP-L4, same NOVA decoder, full robust validation and `val_visual_40960/`;
+6. normalization check: run one targeted `t499/layer09 + norm` setting against the existing best WAN route after the queued Route2.1 packs complete.
 
 Deferred settings:
 

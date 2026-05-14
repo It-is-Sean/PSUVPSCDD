@@ -23,7 +23,8 @@ Interpretation:
 
 - the WAN route is live, but the absolute scores are still much worse than clean-GT VGGT;
 - the current evidence is strong enough to rule out a trivial cache-loader bug, but not strong enough to support a claim that WAN is a good geometric backbone in this probe setting;
-- the reasonable follow-up is Route2.1: test `no_noise` and `low_noise` feature modes for layers `9,14,29`, plus one targeted `t499/layer09 + norm` setting, before moving to pair-tiled context, I2V/FLF2V, or broader adapter changes.
+- the immediate follow-up moved into execution on `2026-05-12`: Route2.1 `no_noise` / `low_noise` support was implemented, and jobs `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359` were queued for layers `9,14,29`;
+- after that queue resolves, run one targeted `t499/layer09 + norm` setting before moving to pair-tiled context, I2V/FLF2V, or broader adapter changes.
 
 ## 2026-05-11 SCRREAM sequence-meta GT correction and clean VGGT rerun
 

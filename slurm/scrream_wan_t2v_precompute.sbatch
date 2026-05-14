@@ -41,8 +41,14 @@ fi
 ADAPTER_DATA="${WAN_ADAPTER_DATA:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt}"
 CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81}"
 MODEL_ID="${WAN_MODEL_ID:-checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers}"
-TIMESTEPS="${WAN_TIMESTEPS:-249,499,749}"
 LAYERS="${WAN_LAYERS:-9,14,19,24,29}"
+NOISE_MODE="${WAN_NOISE_MODE:-normal}"
+LOW_NOISE_INDEX="${WAN_LOW_NOISE_INDEX:-999}"
+if [[ "$NOISE_MODE" == "normal" ]]; then
+  TIMESTEPS="${WAN_TIMESTEPS:-249,499,749}"
+else
+  TIMESTEPS="${WAN_TIMESTEPS:-$LOW_NOISE_INDEX}"
+fi
 MAX_SAMPLES="${WAN_MAX_SAMPLES:-0}"
 DTYPE="${WAN_DTYPE:-bf16}"
 DEVICE="${WAN_DEVICE:-cuda}"
@@ -65,6 +71,8 @@ echo "  cache_dir=$CACHE_DIR"
 echo "  model_id=$MODEL_ID"
 echo "  timesteps=$TIMESTEPS"
 echo "  layers=$LAYERS"
+echo "  noise_mode=$NOISE_MODE"
+echo "  low_noise_index=$LOW_NOISE_INDEX"
 echo "  max_samples=$MAX_SAMPLES"
 echo "  dtype=$DTYPE"
 echo "  vae_device=$VAE_DEVICE"
@@ -78,6 +86,8 @@ python -u experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py \
   --model_id "$MODEL_ID" \
   --timesteps "$TIMESTEPS" \
   --layers "$LAYERS" \
+  --noise_mode "$NOISE_MODE" \
+  --low_noise_index "$LOW_NOISE_INDEX" \
   --dtype "$DTYPE" \
   --device "$DEVICE" \
   --vae_device "$VAE_DEVICE" \

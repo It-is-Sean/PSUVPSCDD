@@ -109,6 +109,7 @@ DEFAULT_CACHE_ROOT = "experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx8
 DEFAULT_MODEL_ID = "checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers"
 DEFAULT_LAYERS = "9,14,19,24,29"
 DEFAULT_TIMESTEPS = "249,499,749"
+DEFAULT_LOW_NOISE_INDEX = 999
 WAN_TOKENS = (21, 30, 52)
 
 
@@ -356,13 +357,24 @@ class WanT2VFeatureExtractor:
 
         class OneStepWanPipeline(WanPipeline):
             @torch.no_grad()
-            def __call__(self, video, t, output_layers, prompt_embeds, generator=None):
+            def __call__(
+                self,
+                video,
+                t,
+                output_layers,
+                prompt_embeds,
+                generator=None,
+                noise_mode="normal",
+                low_noise_index=DEFAULT_LOW_NOISE_INDEX,
+            ):
                 device = next(self.transformer.parameters()).device
                 vae_device = getattr(self, "_probe_vae_device", device)
                 video_tensor = self.video_processor.preprocess_video(
                     video, height=self._probe_height, width=self._probe_width
                 ).to(vae_device, dtype=torch.float32)
                 self.scheduler.set_timesteps(1000, device=device)
+                if noise_mode not in {"normal", "no_noise", "low_noise"}:
+                    raise ValueError(f"Unsupported WAN noise_mode={noise_mode!r}")
                 latents = self.vae.encode(video_tensor).latent_dist.mean
                 latents_mean = torch.tensor(self.vae.config.latents_mean).view(
                     1, self.vae.config.z_dim, 1, 1, 1
@@ -372,21 +384,41 @@ class WanT2VFeatureExtractor:
                 ).to(latents.device, latents.dtype)
                 latents = (latents - latents_mean) * latents_std
                 latents = latents.to(device)
-                t_idx = torch.tensor([int(t)], dtype=torch.long, device=device)
+                requested_timestep_index = int(t)
+                effective_timestep_index = requested_timestep_index if noise_mode == "normal" else int(low_noise_index)
+                if effective_timestep_index < 0 or effective_timestep_index >= len(self.scheduler.timesteps):
+                    raise ValueError(
+                        f"Effective WAN timestep index must be in [0,{len(self.scheduler.timesteps) - 1}], "
+                        f"got {effective_timestep_index}"
+                    )
+                t_idx = torch.tensor([effective_timestep_index], dtype=torch.long, device=device)
                 t_input = self.scheduler.timesteps[t_idx].to(device)
-                if generator is None:
-                    noise = torch.randn(latents.shape, device=device, dtype=latents.dtype)
+                latent_noise_applied = noise_mode != "no_noise"
+                if latent_noise_applied:
+                    if generator is None:
+                        noise = torch.randn(latents.shape, device=device, dtype=latents.dtype)
+                    else:
+                        noise = torch.randn(latents.shape, device=device, dtype=latents.dtype, generator=generator)
+                    transformer_latents = self.scheduler.add_noise(latents, noise, t_input)
                 else:
-                    noise = torch.randn(latents.shape, device=device, dtype=latents.dtype, generator=generator)
-                latents_noisy = self.scheduler.add_noise(latents, noise, t_input)
+                    transformer_latents = latents
                 transformer_dtype = self.transformer.dtype
-                return self.transformer(
-                    hidden_states=latents_noisy.to(dtype=transformer_dtype),
+                output = self.transformer(
+                    hidden_states=transformer_latents.to(dtype=transformer_dtype),
                     timestep=t_input.expand(latents.shape[0]),
                     encoder_hidden_states=prompt_embeds.to(device=device, dtype=transformer_dtype),
                     return_dict=True,
                     output_layers=output_layers,
                 )
+                noise_info = {
+                    "noise_mode": str(noise_mode),
+                    "requested_timestep_index": int(requested_timestep_index),
+                    "timestep_index": int(effective_timestep_index),
+                    "scheduler_timestep": float(t_input.detach().float().cpu().item()),
+                    "latent_noise_applied": bool(latent_noise_applied),
+                    "low_noise_index": int(low_noise_index),
+                }
+                return output, noise_info
 
         transformer = TransformerWanWithFeatureOutput.from_pretrained(
             self.model_id,
@@ -422,20 +454,31 @@ class WanT2VFeatureExtractor:
         return pipe
 
     @torch.no_grad()
-    def extract(self, frames: list[Image.Image], timestep: int, layers: list[int], seed: int) -> dict[int, torch.Tensor]:
+    def extract(
+        self,
+        frames: list[Image.Image],
+        timestep: int,
+        layers: list[int],
+        seed: int,
+        noise_mode: str,
+        low_noise_index: int,
+    ) -> tuple[dict[int, torch.Tensor], dict[str, Any]]:
         generator = torch.Generator(device=self.device)
         generator.manual_seed(int(seed))
-        _, hidden_states = self.pipe(
+        (_, hidden_states), noise_info = self.pipe(
             video=frames,
             t=int(timestep),
             output_layers=[int(x) for x in layers],
             prompt_embeds=self.prompt_embeds,
             generator=generator,
+            noise_mode=str(noise_mode),
+            low_noise_index=int(low_noise_index),
         )
         missing = set(layers) - set(hidden_states.keys())
         if missing:
             raise RuntimeError(f"WAN did not return requested layers: {sorted(missing)}")
-        return {int(layer): reshape_wan_tokens(hidden_states[int(layer)]).detach().cpu() for layer in layers}
+        features = {int(layer): reshape_wan_tokens(hidden_states[int(layer)]).detach().cpu() for layer in layers}
+        return features, noise_info
 
 
 def write_cache(path: Path, features: torch.Tensor, metadata: dict[str, Any]) -> None:
@@ -453,6 +496,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", default="")
     parser.add_argument("--timesteps", default=DEFAULT_TIMESTEPS)
     parser.add_argument("--layers", default=DEFAULT_LAYERS)
+    parser.add_argument(
+        "--noise_mode",
+        default="normal",
+        choices=("normal", "no_noise", "low_noise"),
+        help=(
+            "WAN latent noise mode. normal preserves Route2 behavior; no_noise feeds clean VAE latents "
+            "with low-noise timestep embedding; low_noise adds scheduler noise at --low_noise_index."
+        ),
+    )
+    parser.add_argument(
+        "--low_noise_index",
+        type=int,
+        default=DEFAULT_LOW_NOISE_INDEX,
+        help="Scheduler timestep index used by no_noise/low_noise modes. Default 999 maps to the local WAN timestep 5.",
+    )
     parser.add_argument("--window_size", type=int, default=81)
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--width", type=int, default=832)
@@ -484,6 +542,13 @@ def main() -> None:
         raise ValueError(f"WAN T2V-1.3B layer ids must be in [0,29], got {layers}")
     if any(timestep < 0 or timestep > 999 for timestep in timesteps):
         raise ValueError(f"Timesteps must index the 1000-step scheduler in [0,999], got {timesteps}")
+    if args.low_noise_index < 0 or args.low_noise_index > 999:
+        raise ValueError(f"--low_noise_index must be in [0,999], got {args.low_noise_index}")
+    if args.noise_mode != "normal" and timesteps != [int(args.low_noise_index)]:
+        raise ValueError(
+            f"{args.noise_mode} caches must use --timesteps {args.low_noise_index} so cache paths match "
+            "the effective WAN timestep embedding."
+        )
 
     payload = torch.load(args.adapter_data, map_location="cpu")
     metadata = payload.get("metadata")
@@ -504,6 +569,8 @@ def main() -> None:
         "prompt": args.prompt,
         "timesteps": timesteps,
         "layers": layers,
+        "noise_mode": args.noise_mode,
+        "low_noise_index": int(args.low_noise_index),
         "window_size": args.window_size,
         "height": args.height,
         "width": args.width,
@@ -547,7 +614,14 @@ def main() -> None:
             if frames is None:
                 frames = load_frames(spec.window_paths)
             feature_seed = int(args.seed + sample_idx * 1000 + timestep)
-            wan_features = extractor.extract(frames, timestep=timestep, layers=missing_layers, seed=feature_seed)
+            wan_features, noise_info = extractor.extract(
+                frames,
+                timestep=timestep,
+                layers=missing_layers,
+                seed=feature_seed,
+                noise_mode=args.noise_mode,
+                low_noise_index=int(args.low_noise_index),
+            )
             for layer, full_feature in wan_features.items():
                 pair_feature = full_feature[list(spec.temporal_indices)].reshape(-1, full_feature.shape[-1]).contiguous()
                 if tuple(pair_feature.shape) != (3120, 1536):
@@ -558,6 +632,12 @@ def main() -> None:
                     "model_id": str(args.model_id),
                     "prompt": args.prompt,
                     "timestep": int(timestep),
+                    "noise_mode": args.noise_mode,
+                    "timestep_index": int(noise_info["timestep_index"]),
+                    "requested_timestep_index": int(noise_info["requested_timestep_index"]),
+                    "scheduler_timestep": float(noise_info["scheduler_timestep"]),
+                    "latent_noise_applied": bool(noise_info["latent_noise_applied"]),
+                    "low_noise_index": int(args.low_noise_index),
                     "layer": int(layer),
                     "seed": feature_seed,
                     "source": "wan_t2v_video_context",

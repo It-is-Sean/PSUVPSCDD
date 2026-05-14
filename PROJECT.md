@@ -24,7 +24,9 @@ The current research interpretation is:
 - WAN checkpoint download/preflight completed; the local checkpoint is `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB), 2-sample WAN feature smoke job `86282` completed for timestep `749`, layer `20`, and full feature precompute jobs `86292` / `86293` / `86294` completed for the official 15-grid cache;
 - WAN cache root `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81` contains `4937` `.pt` files / about `45G`; formal training pack job `86307` completed all 15 runs on `air-node-04`, exit `0:0`, elapsed `13:36:04`;
 - WAN sanity job `86316` confirmed the cache path is non-degenerate; best formal WAN is `t499/layer09` (`F@0.10=0.46988987902779306`, `pred_to_gt_p90=0.48718947172164917`, `Chamfer=0.21040735269586244`), still far weaker than clean-GT VGGT layer `16`, so this remains a setting-sensitive exploratory branch rather than a claim-level result;
-- next WAN audit is Route2.1: implement `no_noise` and `low_noise` cache modes for layers `9,14,29`, then run short probes; also run one targeted `t499/layer09 + norm` setting; defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps;
+- WAN Route2.1 is now implemented in the current workspace: `prepare_scrream_wan_t2v_feature_cache.py` supports `no_noise` / `low_noise`, `train_wan_t2v_nova_adapter.py` persists representative WAN cache metadata, and `slurm/scrream_wan_t2v_route21_pack_train.sbatch` launches the packed training grid;
+- Route2.1 jobs queued on `2026-05-12 22:47 CST`: cache smokes `86342` / `86343`, dependent full caches `86350` / `86351`, no-noise smoke train `86357`, and formal packs `86358` / `86359`;
+- after Route2.1, run one targeted `t499/layer09 + norm` setting; defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps;
 - default formal SCRREAM / WAN ablation runs should now use `50` epochs unless an experiment explicitly overrides the epoch count;
 - local checkpoints now include `checkpoints/scene_n1/checkpoint-last.pth`, `checkpoints/scene_n2/checkpoint-last.pth`, `checkpoints/scene_ae/checkpoint-last.pth`, and `checkpoints/vggt/model.pt`.
 
@@ -179,7 +181,7 @@ The most informative current run is the short ScanNet probe, not the old long fo
 ## Immediate next step
 
 1. use clean-GT VGGT layer `16` as the current default and layer `24` as the close comparison point
-2. implement WAN Route2.1 `no_noise` / `low_noise` feature cache modes and test layers `9,14,29`
+2. monitor the queued WAN Route2.1 `no_noise` / `low_noise` cache and training chain for layers `9,14,29`
 3. run a targeted `t499/layer09 + norm` setting to check whether feature scale/normalization is masking WAN quality
 4. expand SCRREAM training sample scale beyond 329 official pairs after the Route2.1 audit
 5. keep InteriorGS as a data-quality option only after SCRREAM scale/model coverage is better understood

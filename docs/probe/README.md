@@ -15,7 +15,7 @@ Key corrections:
 - The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
 - The old local `eval_scrream` branch is invalid for claims, but full SCRREAM is now downloaded at `~/datasets/SCRREAM`.
 - The active baseline branch is SCRREAM full-data mesh-complete VGGT adapter training on sequence-meta-filtered clean GT.
-- The active model-coverage branch is SCRREAM WAN2.1 T2V Route2, which keeps the VGGT ablation's data/GT/split/adapter/decoder/validation fixed and changes only the representation. Slurm job `86307` completed the full 15-run ablation pack; best WAN is `t499/layer09`, above zero/sample-shuffle controls but far below clean-GT VGGT. Treat the route as exploratory / setting-sensitive, and audit `no_noise` / `low_noise` plus one `t499/layer09 + norm` setting next.
+- The active model-coverage branch is SCRREAM WAN2.1 T2V Route2, which keeps the VGGT ablation's data/GT/split/adapter/decoder/validation fixed and changes only the representation. Slurm job `86307` completed the full 15-run ablation pack; best WAN is `t499/layer09`, above zero/sample-shuffle controls but far below clean-GT VGGT. Treat the route as exploratory / setting-sensitive. Route2.1 `no_noise` / `low_noise` support is now implemented, and the smoke/full-cache/train chain `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359` was queued on `2026-05-12 22:47 CST`.
 - Long data generation and training should use `slurm/` scripts with logs in `slurm_out/`.
 - Slurm job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; `final_metrics.json` reports `best_val_chamfer_l2=0.5149603486061096`.
 - Slurm job `86149` completed the robust VGGT layer ablation on `2026-05-08`, but it used the pre-meta-filter GT and is now historical. Clean-GT VGGT ablation job `86286` completed successfully; the current default is layer `16`, with layer `24` as the main comparison point.
@@ -47,7 +47,7 @@ WAN Route2 entrypoints:
 - dependency pins: `../../experiments/probe3d/requirements-wan-t2v.txt`
 - feature cache: `../../experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py`
 - training: `../../experiments/probe3d/train_wan_t2v_nova_adapter.py`
-- Slurm: `../../slurm/scrream_wan_t2v_download.sbatch`, `../../slurm/scrream_wan_t2v_precompute.sbatch`, `../../slurm/scrream_wan_t2v_ablation_pack_train.sbatch`
+- Slurm: `../../slurm/scrream_wan_t2v_download.sbatch`, `../../slurm/scrream_wan_t2v_precompute.sbatch`, `../../slurm/scrream_wan_t2v_ablation_pack_train.sbatch`, `../../slurm/scrream_wan_t2v_route21_pack_train.sbatch`
 
 Status on `2026-05-12 16:32 CST`: the WAN checkpoint is present under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers`. Full WAN feature precompute completed as jobs `86292`, `86293`, and `86294`, writing `4937` `.pt` files / about `45G`. Training pack job `86307` completed on `air-node-04`, exit `0:0`, elapsed `13:36:04`.
 
@@ -55,7 +55,7 @@ Route2 result:
 
 - best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-- next Route2.1 audit: layers `9,14,29` with `no_noise` and `low_noise` cache modes, then one targeted `t499/layer09 + norm` setting
+- Route2.1 implementation state: layers `9,14,29` with `no_noise` and `low_noise` cache modes are queued through `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359`; after those complete, run one targeted `t499/layer09 + norm` setting
 - deferred WAN settings: `pair_tiled81` vs `ctx81`, I2V/FLF2V conditioning, and broader normalization / adapter sweeps
 
 ### 2. What about ScanNet?

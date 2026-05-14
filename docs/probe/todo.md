@@ -82,10 +82,10 @@
 - [x] confirm job `86307` finished all 15 runs: timesteps `249,499,749` x code layers `9,14,19,24,29`
 - [x] compare WAN Route2 results against clean-GT VGGT layer `16` and layer `24`
 - [x] record best WAN Route2 as `t499/layer09` and interpret the current route as setting-limited rather than claim-level
-- [ ] implement WAN Route2.1 `no_noise` cache mode and record actual scheduler timestep / sigma metadata
-- [ ] implement WAN Route2.1 `low_noise` cache mode and record actual scheduler timestep / sigma metadata
-- [ ] precompute Route2.1 features for layers `9,14,29` under `no_noise` and `low_noise`
-- [ ] run short Route2.1 adapter probes for layers `9,14,29` under `no_noise` and `low_noise`
+- [x] implement WAN Route2.1 `no_noise` cache mode and record `requested_timestep_index`, `scheduler_timestep`, `latent_noise_applied`, and `low_noise_index`
+- [x] implement WAN Route2.1 `low_noise` cache mode and record the same cache metadata fields
+- [ ] finish queued Route2.1 cache chain for layers `9,14,29` under `no_noise` and `low_noise` (`86342/86343 -> 86350/86351`)
+- [ ] finish queued Route2.1 smoke/formal adapter runs (`86357 -> 86358/86359`)
 - [ ] run targeted `t499/layer09 + norm` setting to test feature-scale / feature-normalization effects
 - [ ] defer `pair_tiled81` vs `ctx81` until after Route2.1
 - [ ] defer I2V / FLF2V conditioning until after Route2.1

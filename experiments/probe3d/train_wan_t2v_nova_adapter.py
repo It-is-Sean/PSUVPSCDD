@@ -131,6 +131,16 @@ def get_wan_t2v_cached_features(
     return torch.stack(selected_list, dim=0).contiguous()
 
 
+def read_wan_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str) -> dict:
+    path = wan_cache_path(Path(feature_cache_dir), int(wan_timestep), int(wan_layer), str(sample_id))
+    if not path.exists():
+        return {}
+    payload = torch.load(path, map_location="cpu")
+    if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
+        return dict(payload["metadata"])
+    return {}
+
+
 def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, output_dir: Path | None = None, global_step: int | None = None, save_previews: bool = False):
     from train_vggt_nova_adapter import (
         QUALITY_METRIC_KEYS,
@@ -407,6 +417,12 @@ def main():
             print(f"Requested WAN T2V timestep/layer: {args.wan_timestep}/{args.wan_layer}")
             print(f"WAN feature mode: {args.wan_feature_mode}")
             print(f"Selected WAN feature shape: {tuple(selected.shape)}")
+        wan_cache_metadata = read_wan_cache_metadata(
+            args.wan_feature_cache_dir,
+            args.wan_timestep,
+            args.wan_layer,
+            first_batch["scene_ids"][0],
+        )
 
         if args.adapter_type == "mlp":
             adapter = VGGTToNovaAdapter(
@@ -464,6 +480,18 @@ def main():
             {
                 "feature_backbone": "wan_t2v_cache",
                 "selected_feature_shape": list(selected.shape),
+                "wan_cache_metadata": {
+                    key: wan_cache_metadata.get(key)
+                    for key in (
+                        "noise_mode",
+                        "timestep_index",
+                        "requested_timestep_index",
+                        "scheduler_timestep",
+                        "latent_noise_applied",
+                        "low_noise_index",
+                    )
+                    if key in wan_cache_metadata
+                },
                 "adapter_type": args.adapter_type,
                 "adapter_heads": args.adapter_heads,
                 "adapter_mlp_ratio": args.adapter_mlp_ratio,
@@ -726,6 +754,7 @@ def main():
                 "wan_layer": int(args.wan_layer),
                 "wan_feature_mode": args.wan_feature_mode,
                 "wan_feature_shuffle_seed": int(args.wan_feature_shuffle_seed),
+                "wan_cache_metadata": config.get("wan_cache_metadata", {}),
                 "first_loss": first_loss,
                 "final_loss": final_loss,
                 "best_loss": best_loss,

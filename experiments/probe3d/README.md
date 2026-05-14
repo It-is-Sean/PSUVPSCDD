@@ -14,7 +14,7 @@ The active probe state has moved to the corrected full SCRREAM branch. Important
 - submit long data-prep and training work through `slurm/`; Slurm logs go to `slurm_out/`.
 - job `86140` completed the pre-meta-filter 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; treat it as historical after the sequence-meta GT correction.
 - job `86286` completed the VGGT layer ablation on clean sequence-meta-filtered GT under `*robustval_metafilter_seed17_vggt_layerXX`; VGGT layer `16` is the current default, with layer `24` as the main comparison point.
-- WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 runs. Best WAN is `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT, so treat the branch as exploratory and setting-sensitive.
+- WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 runs. Best WAN is `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT, so treat the branch as exploratory and setting-sensitive. Route2.1 `no_noise` / `low_noise` code is now present and its queued job chain is `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359`.
 - initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`.
 
 
@@ -73,7 +73,7 @@ Route2 result:
 
 - best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-- next Route2.1 audit: add `no_noise` / `low_noise` WAN cache modes for layers `9,14,29`, plus a targeted `t499/layer09 + norm` setting
+- Route2.1 status: `no_noise` / `low_noise` WAN cache modes for layers `9,14,29` are implemented and queued; run the targeted `t499/layer09 + norm` setting after those results land
 - deferred WAN settings: `pair_tiled81` vs `ctx81`, I2V/FLF2V conditioning, and broader feature-normalization / adapter sweeps
 
 Download/preflight WAN dependencies and checkpoint:
