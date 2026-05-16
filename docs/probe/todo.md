@@ -1,6 +1,6 @@
 # TODO
 
-## Active now — 2026-05-12
+## Active now — 2026-05-16
 
 ### SCRREAM full mesh-complete adapter line
 - [x] download full SCRREAM to `~/datasets/SCRREAM`
@@ -84,12 +84,28 @@
 - [x] record best WAN Route2 as `t499/layer09` and interpret the current route as setting-limited rather than claim-level
 - [x] implement WAN Route2.1 `no_noise` cache mode and record `requested_timestep_index`, `scheduler_timestep`, `latent_noise_applied`, and `low_noise_index`
 - [x] implement WAN Route2.1 `low_noise` cache mode and record the same cache metadata fields
-- [ ] finish queued Route2.1 cache chain for layers `9,14,29` under `no_noise` and `low_noise` (`86342/86343 -> 86350/86351`)
-- [ ] finish queued Route2.1 smoke/formal adapter runs (`86357 -> 86358/86359`)
-- [ ] run targeted `t499/layer09 + norm` setting to test feature-scale / feature-normalization effects
-- [ ] defer `pair_tiled81` vs `ctx81` until after Route2.1
-- [ ] defer I2V / FLF2V conditioning until after Route2.1
-- [ ] defer broader normalization / adapter-capacity sweeps until after Route2.1
+- [x] finish Route2.1 cache chain for layers `9,14,29` under `no_noise` and `low_noise` (`86342/86343 -> 86350/86351`)
+- [x] finish Route2.1 smoke/formal adapter runs (`86357`, replacement 1-GPU formal packs `86371` / `86372`)
+- [x] finish targeted `t499/layer09 + token_layernorm` setting to test feature-scale / feature-normalization effects (`86395`)
+- [x] finish `pair_tiled81` vs `ctx81` audit as jobs `86396 -> 86397 -> 86400 -> 86401`
+- [x] conclude simple noise-level, token-normalization, and pair-context-dilution explanations do not explain the WAN gap
+- [x] record generator-preserving WAN representation-search plan; VidFM3D is a reference, but this project keeps NOVA/FM as the probe generator
+- [x] treat A (`ctx81 normal t499/layer09 block hidden + MLP-L4 -> NOVA/FM`) as the completed baseline, not a new run
+- [ ] later tensor-choice audit B: final WAN transformer output / noise-pred-like tensor -> MLP-L4 -> NOVA/FM
+- [x] implement C: predicted clean latent / x0 estimate -> MLP-L4 -> NOVA/FM (`--feature_kind pred_x0_latent`, `--wan_feature_kind pred_x0_latent`)
+- [x] finish pred-x0 full cache job `86411` for all 329 SCRREAM samples; cache files under `t499/pred_x0_latent/` have feature shape `[12480,16]` and metadata fields `sigma`, `x0_formula`, and latent/model-output shapes
+- [x] record original pred-x0 MLP readout failure: `86412` failed on PyTorch CUDA adaptive-pooling backward and should not be treated as a result
+- [x] implement `conv2d_mlp` pred-x0 readout: restore `[B,2,60,104,16]`, Conv2d stride-2 to `[B,3120,128]`, then pool to `[B,768,128]`
+- [x] verify pred-x0 conv smoke job `86421`: loss, robust val metrics, checkpoints, and no CUDA pooling crash
+- [x] finish pred-x0 conv formal train job `86422` and compare against old WAN `t499/layer09`; result did not beat old hidden
+- [x] implement and run fixed hidden `grid2d_pool` readout (`86423` / `86424`); result did not beat old hidden
+- [x] implement and run fixed hidden `grid2d_conv` readout (`86425` / `86426`); result did not beat old hidden or `grid2d_pool`
+- [x] implement D adapter: current block hidden -> learned cross-attention / Perceiver-style resampler -> NOVA/FM (`--adapter_type wan_cross_attn_resampler`)
+- [x] submit D smoke/formal chain for `ctx81 normal t499/layer09`, adapter layers `2`, hidden dim `512`, heads `8`: smoke `86427`, formal `86428` with `afterok:86427`
+- [ ] inspect D smoke job `86427` and formal job `86428` metrics / `val_visual_40960`
+- [ ] after D, optionally test E: multi-layer hidden fusion (`9+19+29`) -> resampler -> NOVA/FM
+- [ ] defer F: I2V / FLF2V condition-side features -> resampler -> NOVA/FM until T2V tensor/readout audits are understood
+- [ ] defer low-priority MLP-only capacity variants (`MLP-L6-H1024`, `MLP-L4-H2048`); note the current MLP already uses `GELU`, so this is probably not the root cause
 
 ## Deferred after SCRREAM baseline
 

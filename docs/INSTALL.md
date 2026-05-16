@@ -129,7 +129,7 @@ cd ../../
 bash scripts/download_checkpoints.sh
 ```
 
-Current local research-workspace state on 2026-05-12:
+Current local research-workspace state on 2026-05-16:
 
 - `checkpoints/scene_n1/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml` are present.
@@ -138,7 +138,10 @@ Current local research-workspace state on 2026-05-12:
 - WAN checkpoint target `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` is present locally (~27 GB); future downloads/preflight are handled by `slurm/scrream_wan_t2v_download.sbatch`.
 - Proxy `http://127.0.0.1:7896` is the working non-WAN route for checkpoint / HuggingFace access on this machine.
 - WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890`; the WAN Slurm scripts create a compute-node SSH tunnel back to `air-server:127.0.0.1:17890` by default.
-- WAN sanity job `86316` and full Route2 pack job `86307` completed; the route is non-degenerate, but best WAN (`t499/layer09`) remains well below the clean-GT VGGT baseline.
+- WAN sanity job `86316`, full Route2 pack job `86307`, Route2.1 clean / low-noise jobs `86371` / `86372`, targeted normalization job `86395`, and `pair_tiled81` jobs `86396 -> 86397 -> 86400 -> 86401` completed; the route is non-degenerate, but best WAN remains well below the clean-GT VGGT baseline.
+- The pred-x0 cache script supports `--feature_kind pred_x0_latent`; full cache job `86411` completed `329/329` `[12480,16]` samples, and the training script supports `--wan_feature_kind pred_x0_latent`.
+- The original pred-x0 MLP readout failed on a CUDA adaptive-pooling backward assert. `WAN_ADAPTER_TYPE=conv2d_mlp` fixed the crash path, but formal job `86422` did not beat old WAN hidden (`F@0.10=0.41336424426176693`, `pred_to_gt_p90=0.6272750149170557`).
+- Hidden-grid readouts `WAN_ADAPTER_TYPE=grid2d_pool` and `WAN_ADAPTER_TYPE=grid2d_conv` also completed and did not beat old WAN hidden; the next recommended WAN readout branch is a learned Perceiver / cross-attention resampler.
 - `swanlab==0.7.16` is installed and importable in conda env `nova3r`.
 
 ### 8. Verify

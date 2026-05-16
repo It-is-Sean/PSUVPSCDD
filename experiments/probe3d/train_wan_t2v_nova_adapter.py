@@ -29,6 +29,10 @@ from probe.adapter import (
     VGGTToNovaAdapter,
     VGGTToNovaCrossAttentionAdapter,
     VGGTToNovaSelfAttentionAdapter,
+    WanHiddenCrossAttentionResamplerAdapter,
+    WanHiddenGrid2DConvAdapter,
+    WanHiddenGrid2DPoolAdapter,
+    WanPredX0LatentConvAdapter,
 )
 from vggt_nova_adapter_common_raw import (
     amp_context,
@@ -64,33 +68,62 @@ from train_vggt_nova_adapter import (
     save_checkpoint,
 )
 
+FEATURE_KIND_HIDDEN = "hidden"
+FEATURE_KIND_PRED_X0_LATENT = "pred_x0_latent"
+ADAPTER_TYPE_CONV2D_MLP = "conv2d_mlp"
+ADAPTER_TYPE_GRID2D_POOL = "grid2d_pool"
+ADAPTER_TYPE_GRID2D_CONV = "grid2d_conv"
+ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER = "wan_cross_attn_resampler"
+
 
 def safe_cache_sample_id(sample_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", str(sample_id)).strip("_")
 
 
-def wan_cache_path(cache_root: Path, timestep: int, layer: int, sample_id: str) -> Path:
+def wan_cache_path(cache_root: Path, timestep: int, layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> Path:
+    if feature_kind == FEATURE_KIND_PRED_X0_LATENT:
+        return cache_root / f"t{int(timestep):03d}" / FEATURE_KIND_PRED_X0_LATENT / f"{safe_cache_sample_id(sample_id)}.pt"
+    if feature_kind != FEATURE_KIND_HIDDEN:
+        raise ValueError(f"Unsupported WAN feature kind {feature_kind!r}")
     return cache_root / f"t{int(timestep):03d}" / f"layer{int(layer):02d}" / f"{safe_cache_sample_id(sample_id)}.pt"
 
 
 @lru_cache(maxsize=128)
-def cached_wan_sample_ids(feature_cache_dir: str, wan_timestep: int, wan_layer: int) -> tuple[str, ...]:
+def cached_wan_sample_ids(feature_cache_dir: str, wan_timestep: int, wan_layer: int, feature_kind: str = FEATURE_KIND_HIDDEN) -> tuple[str, ...]:
     cache_root = Path(feature_cache_dir)
-    layer_dir = cache_root / f"t{int(wan_timestep):03d}" / f"layer{int(wan_layer):02d}"
-    sample_ids = tuple(sorted(path.stem for path in layer_dir.glob("*.pt")))
+    cache_dir = wan_cache_path(cache_root, int(wan_timestep), int(wan_layer), "__dummy__", feature_kind).parent
+    sample_ids = tuple(sorted(path.stem for path in cache_dir.glob("*.pt")))
     if not sample_ids:
-        raise FileNotFoundError(f"No WAN cache files found under {layer_dir}")
+        raise FileNotFoundError(f"No WAN cache files found under {cache_dir}")
     return sample_ids
 
 
-def shuffled_wan_sample_id(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str, seed: int) -> str:
+def shuffled_wan_sample_id(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str, seed: int, feature_kind: str = FEATURE_KIND_HIDDEN) -> str:
     safe_id = safe_cache_sample_id(sample_id)
-    sample_ids = cached_wan_sample_ids(feature_cache_dir, int(wan_timestep), int(wan_layer))
-    digest = hashlib.sha1(f"{safe_id}:{int(seed)}:{int(wan_timestep)}:{int(wan_layer)}".encode("utf-8")).hexdigest()
+    sample_ids = cached_wan_sample_ids(feature_cache_dir, int(wan_timestep), int(wan_layer), feature_kind)
+    digest = hashlib.sha1(f"{safe_id}:{int(seed)}:{int(wan_timestep)}:{int(wan_layer)}:{feature_kind}".encode("utf-8")).hexdigest()
     idx = int(digest[:16], 16) % len(sample_ids)
     if len(sample_ids) > 1 and sample_ids[idx] == safe_id:
         idx = (idx + 1) % len(sample_ids)
     return sample_ids[idx]
+
+
+def normalize_wan_features(features: torch.Tensor, mode: str = "none", eps: float = 1e-6) -> torch.Tensor:
+    if mode == "none":
+        return features
+    eps = float(eps)
+    if mode == "token_layernorm":
+        mean = features.mean(dim=-1, keepdim=True)
+        var = features.var(dim=-1, unbiased=False, keepdim=True)
+        return (features - mean) * torch.rsqrt(var + eps)
+    if mode == "sample_standardize":
+        dims = tuple(range(1, features.ndim))
+        mean = features.mean(dim=dims, keepdim=True)
+        var = features.var(dim=dims, unbiased=False, keepdim=True)
+        return (features - mean) * torch.rsqrt(var + eps)
+    if mode == "token_l2":
+        return torch.nn.functional.normalize(features, p=2.0, dim=-1, eps=eps)
+    raise ValueError(f"Unsupported WAN feature normalization mode {mode!r}")
 
 
 def get_wan_t2v_cached_features(
@@ -101,6 +134,9 @@ def get_wan_t2v_cached_features(
     wan_layer: int,
     feature_mode: str = "cache",
     shuffle_seed: int = 17,
+    feature_norm: str = "none",
+    feature_norm_eps: float = 1e-6,
+    feature_kind: str = FEATURE_KIND_HIDDEN,
 ) -> torch.Tensor:
     cache_root = Path(feature_cache_dir)
     if feature_mode not in {"cache", "zero", "sample_shuffle"}:
@@ -115,11 +151,13 @@ def get_wan_t2v_cached_features(
                 int(wan_layer),
                 str(sample_id),
                 int(shuffle_seed),
+                feature_kind,
             )
-        path = wan_cache_path(cache_root, int(wan_timestep), int(wan_layer), load_sample_id)
+        path = wan_cache_path(cache_root, int(wan_timestep), int(wan_layer), load_sample_id, feature_kind)
         if not path.exists():
             raise FileNotFoundError(
-                f"Missing WAN T2V cache for sample={load_sample_id} timestep={wan_timestep} layer={wan_layer}: {path}"
+                f"Missing WAN T2V cache for sample={load_sample_id} timestep={wan_timestep} "
+                f"layer={wan_layer} feature_kind={feature_kind}: {path}"
             )
         payload = torch.load(path, map_location="cpu")
         features = payload["features"] if isinstance(payload, dict) else payload
@@ -128,11 +166,12 @@ def get_wan_t2v_cached_features(
         if feature_mode == "zero":
             features = torch.zeros_like(features)
         selected_list.append(features.to(device=device, dtype=torch.float32))
-    return torch.stack(selected_list, dim=0).contiguous()
+    selected = torch.stack(selected_list, dim=0).contiguous()
+    return normalize_wan_features(selected, mode=feature_norm, eps=feature_norm_eps).contiguous()
 
 
-def read_wan_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str) -> dict:
-    path = wan_cache_path(Path(feature_cache_dir), int(wan_timestep), int(wan_layer), str(sample_id))
+def read_wan_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> dict:
+    path = wan_cache_path(Path(feature_cache_dir), int(wan_timestep), int(wan_layer), str(sample_id), feature_kind)
     if not path.exists():
         return {}
     payload = torch.load(path, map_location="cpu")
@@ -176,6 +215,9 @@ def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, out
                 args.wan_layer,
                 args.wan_feature_mode,
                 args.wan_feature_shuffle_seed,
+                args.wan_feature_norm,
+                args.wan_feature_norm_eps,
+                args.wan_feature_kind,
             )
             tokens = adapter_module(selected)
             pred = sample_decoder(decoder, tokens, args.num_queries, meta["fm_step_size"], args.seed + batch_idx, images.shape[1])
@@ -287,7 +329,19 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--adapter_layers", type=int, default=4)
     parser.add_argument("--adapter_hidden_dim", type=int, default=1024)
-    parser.add_argument("--adapter_type", default="mlp", choices=("mlp", "cross_attention", "self_attention"))
+    parser.add_argument(
+        "--adapter_type",
+        default="mlp",
+        choices=(
+            "mlp",
+            "cross_attention",
+            "self_attention",
+            ADAPTER_TYPE_CONV2D_MLP,
+            ADAPTER_TYPE_GRID2D_POOL,
+            ADAPTER_TYPE_GRID2D_CONV,
+            ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER,
+        ),
+    )
     parser.add_argument("--adapter_heads", type=int, default=8)
     parser.add_argument("--adapter_mlp_ratio", type=float, default=2.0)
     parser.add_argument("--max_steps", type=int, default=3000)
@@ -320,8 +374,16 @@ def parse_args():
     parser.add_argument("--wan_feature_cache_dir", required=True)
     parser.add_argument("--wan_timestep", type=int, default=749)
     parser.add_argument("--wan_layer", type=int, default=20)
+    parser.add_argument("--wan_feature_kind", default=FEATURE_KIND_HIDDEN, choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT))
     parser.add_argument("--wan_feature_mode", default="cache", choices=("cache", "zero", "sample_shuffle"))
     parser.add_argument("--wan_feature_shuffle_seed", type=int, default=17001)
+    parser.add_argument(
+        "--wan_feature_norm",
+        default="none",
+        choices=("none", "token_layernorm", "sample_standardize", "token_l2"),
+        help="Optional normalization applied after loading cached WAN features; default preserves historical runs.",
+    )
+    parser.add_argument("--wan_feature_norm_eps", type=float, default=1e-6)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb_project", default="PSUVPSC3DD")
     parser.add_argument("--wandb_entity", default=None)
@@ -353,6 +415,14 @@ def main():
     dist_ctx = init_distributed_mode()
     try:
         args = parse_args()
+        if args.adapter_type == ADAPTER_TYPE_CONV2D_MLP and args.wan_feature_kind != FEATURE_KIND_PRED_X0_LATENT:
+            raise ValueError("--adapter_type conv2d_mlp is only supported with --wan_feature_kind pred_x0_latent")
+        if args.adapter_type == ADAPTER_TYPE_GRID2D_POOL and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--adapter_type grid2d_pool is only supported with --wan_feature_kind hidden")
+        if args.adapter_type == ADAPTER_TYPE_GRID2D_CONV and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--adapter_type grid2d_conv is only supported with --wan_feature_kind hidden")
+        if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--adapter_type wan_cross_attn_resampler is only supported with --wan_feature_kind hidden")
         if args.debug_one_batch:
             args.max_steps = 1
             args.save_every = 1
@@ -411,17 +481,23 @@ def main():
             args.wan_layer,
             args.wan_feature_mode,
             args.wan_feature_shuffle_seed,
+            args.wan_feature_norm,
+            args.wan_feature_norm_eps,
+            args.wan_feature_kind,
         )
         if is_main:
             print("Feature backbone: wan_t2v_cache")
             print(f"Requested WAN T2V timestep/layer: {args.wan_timestep}/{args.wan_layer}")
+            print(f"WAN feature kind: {args.wan_feature_kind}")
             print(f"WAN feature mode: {args.wan_feature_mode}")
+            print(f"WAN feature norm: {args.wan_feature_norm} eps={args.wan_feature_norm_eps}")
             print(f"Selected WAN feature shape: {tuple(selected.shape)}")
         wan_cache_metadata = read_wan_cache_metadata(
             args.wan_feature_cache_dir,
             args.wan_timestep,
             args.wan_layer,
             first_batch["scene_ids"][0],
+            args.wan_feature_kind,
         )
 
         if args.adapter_type == "mlp":
@@ -444,6 +520,38 @@ def main():
             )
         elif args.adapter_type == "self_attention":
             adapter = VGGTToNovaSelfAttentionAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+                num_heads=args.adapter_heads,
+                mlp_ratio=args.adapter_mlp_ratio,
+            )
+        elif args.adapter_type == ADAPTER_TYPE_CONV2D_MLP:
+            adapter = WanPredX0LatentConvAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+            )
+        elif args.adapter_type == ADAPTER_TYPE_GRID2D_POOL:
+            adapter = WanHiddenGrid2DPoolAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+            )
+        elif args.adapter_type == ADAPTER_TYPE_GRID2D_CONV:
+            adapter = WanHiddenGrid2DConvAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+            )
+        elif args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER:
+            adapter = WanHiddenCrossAttentionResamplerAdapter(
                 input_dim=selected.shape[-1],
                 output_dim=meta["token_dim"],
                 output_tokens=meta["num_scene_tokens"],
@@ -487,8 +595,19 @@ def main():
                         "timestep_index",
                         "requested_timestep_index",
                         "scheduler_timestep",
+                        "sigma",
+                        "scheduler_class",
+                        "scheduler_prediction_type",
+                        "scheduler_predict_x0",
+                        "x0_formula",
                         "latent_noise_applied",
                         "low_noise_index",
+                        "feature_kind",
+                        "source_latent_shape",
+                        "transformer_latent_shape",
+                        "model_output_shape",
+                        "pred_x0_latent_shape",
+                        "feature_shape",
                     )
                     if key in wan_cache_metadata
                 },
@@ -496,6 +615,10 @@ def main():
                 "adapter_heads": args.adapter_heads,
                 "adapter_mlp_ratio": args.adapter_mlp_ratio,
                 "adapter_param_count": count_parameters(unwrap_adapter(probe_model)),
+                "adapter_conv_readout_shape": list(getattr(unwrap_adapter(probe_model), "conv_readout_shape", ())),
+                "adapter_grid_input_shape": list(getattr(unwrap_adapter(probe_model), "grid_input_shape", ())),
+                "adapter_grid_readout_shape": list(getattr(unwrap_adapter(probe_model), "grid_readout_shape", ())),
+                "adapter_resampler_shape": list(getattr(unwrap_adapter(probe_model), "resampler_shape", ())),
                 "loss_type": args.loss_type,
                 "chamfer_weight": args.chamfer_weight,
                 "scannet_complete_points": args.scannet_complete_points,
@@ -566,6 +689,9 @@ def main():
                 args.wan_layer,
                 args.wan_feature_mode,
                 args.wan_feature_shuffle_seed,
+                args.wan_feature_norm,
+                args.wan_feature_norm_eps,
+                args.wan_feature_kind,
             )
             target = get_targets(batch, meta["query_source"], max_points=args.num_queries, norm_mode=meta.get("norm_mode", "none"))
 
@@ -752,8 +878,11 @@ def main():
                 "feature_backbone": "wan_t2v_cache",
                 "wan_timestep": int(args.wan_timestep),
                 "wan_layer": int(args.wan_layer),
+                "wan_feature_kind": args.wan_feature_kind,
                 "wan_feature_mode": args.wan_feature_mode,
                 "wan_feature_shuffle_seed": int(args.wan_feature_shuffle_seed),
+                "wan_feature_norm": args.wan_feature_norm,
+                "wan_feature_norm_eps": float(args.wan_feature_norm_eps),
                 "wan_cache_metadata": config.get("wan_cache_metadata", {}),
                 "first_loss": first_loss,
                 "final_loss": final_loss,

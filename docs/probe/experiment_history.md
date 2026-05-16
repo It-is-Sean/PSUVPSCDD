@@ -1,5 +1,64 @@
 # Experiment history summary
 
+## 2026-05-16 WAN pred-x0 and hidden-grid readout audits
+
+The WAN predicted-x0 / denoised-latent branch moved from cache generation into a readout-specific training audit.
+
+Completed execution:
+
+- full pred-x0 cache job `86411` completed with `329/329` samples under `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81_pred_x0_latent/t499/pred_x0_latent/`;
+- cache tensors have expected shape `[12480,16]` with metadata including `sigma`, `x0_formula`, and latent/model-output shapes;
+- original pred-x0 MLP readout failed before producing a formal result: `86412` hit a PyTorch CUDA `AdaptiveAveragePooling` backward assert when pooling `[12480,128] -> [768,128]`;
+- `WanPredX0LatentConvAdapter` / `--adapter_type conv2d_mlp` was added to restore the latent grid `[B,2,60,104,16]`, apply a stride-2 Conv2d readout to `[B,3120,128]`, then pool to `[B,768,128]`;
+- smoke job `86421` completed on `air-node-02`, exit `0:0`, with robust validation and no pooling crash;
+- formal job `86422` completed on `air-node-02`, exit `0:0`, elapsed `00:52:13`, output `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_pred_x0_latent_conv2d_t499`.
+
+Pred-x0 Conv2d result:
+
+- `best_val_fscore_tau_0.10=0.41336424426176693`
+- `best_val_pred_to_gt_p90=0.6272750149170557`
+- `best_val_chamfer_l2=0.35522504647572833`
+
+Hidden-grid readout audits:
+
+- `WanHiddenGrid2DPoolAdapter` / `--adapter_type grid2d_pool` preserves the hidden cache as `[B,2,30,52,1536]`, maps channels token-wise, then pools to NOVA `[B,2,24,16,128]`; smoke/formal jobs `86423` / `86424` completed on `air-node-04`, with `F@0.10=0.43326753863230877`, `pred_to_gt_p90=0.5651116619507471`, and `Chamfer-L2=0.1759416777640581`;
+- `WanHiddenGrid2DConvAdapter` / `--adapter_type grid2d_conv` adds a small same-resolution 3x3 Conv2d readout before the same 2D pooling; smoke/formal jobs `86425` / `86426` completed on `air-node-04`, with `F@0.10=0.39855373112050535`, `pred_to_gt_p90=0.7689011543989182`, and `Chamfer-L2=1.159957120815913`.
+
+Interpretation: old WAN Route2 `t499/layer09` remains the best WAN setting (`F@0.10=0.46988987902779306`, `pred_to_gt_p90=0.48718947172164917`). Pred-x0 latent, fixed 2D hidden pooling, and tiny fixed 2D conv readout are all negative under the current NOVA/FM generator setup. The next readout/interface branch should be a learned Perceiver / cross-attention resampler from best WAN hidden tokens to NOVA condition tokens.
+
+## 2026-05-15 WAN Route2.1 result, normalization / context checks, and pred-x0 queue
+
+The WAN Route2.1 clean / low-noise audit finished after the original 2026-05-12 queue.
+
+Completed execution:
+
+- cache smokes: `86342` (`low_noise`) and `86343` (`no_noise`);
+- full caches: `86350` and `86351`;
+- smoke train: `86357`;
+- formal packs: replacement 1-GPU jobs `86371` (`no_noise`) and `86372` (`low_noise`), both completed successfully on `air-node-04`.
+
+Result summary:
+
+- best Route2.1 clean/low-noise result was `no_noise/layer29` with `best_val_fscore_tau_0.10=0.44840173` and `best_val_pred_to_gt_p90=0.48779308`;
+- this did not beat the old Route2 best `t499/layer09` (`F@0.10=0.46988987902779306`, `pred_to_gt_p90=0.48718947172164917`);
+- therefore the WAN weakness is unlikely to be explained only by noisy latent diffusion states.
+
+Completed follow-up checks:
+
+- `train_wan_t2v_nova_adapter.py` now supports `--wan_feature_norm none|token_layernorm|sample_standardize|token_l2`;
+- `slurm/scrream_wan_t2v_ablation_pack_train.sbatch` exposes this as `WAN_FEATURE_NORM`;
+- targeted job `86395` completed `t499/layer09 + token_layernorm` with `best_val_fscore_tau_0.10=0.45476213575933216`, `best_val_pred_to_gt_p90=0.484821617603302`, and `best_val_chamfer_l2=0.1771892917652925`;
+- `pair_tiled81` vs `ctx81` completed as jobs `86396 -> 86397 -> 86400 -> 86401` with `best_val_fscore_tau_0.10=0.4429200036613287`, `best_val_pred_to_gt_p90=0.5104739194115003`, and `best_val_chamfer_l2=0.16478415516515574`;
+- neither feature normalization nor pair-tiled context beat the old hidden-state Route2 best `t499/layer09`.
+
+Predicted-x0 / denoised-latent follow-up:
+
+- `prepare_scrream_wan_t2v_feature_cache.py` now supports `--feature_kind pred_x0_latent`, computing `x0 = sample - sigma * model_output` from WAN's `flow_prediction` scheduler path;
+- pred-x0 caches use `t499/pred_x0_latent/<sample>.pt`, expected feature shape `[12480,16]`, and metadata records `sigma`, scheduler class / prediction type, source latent shape, model output shape, and `x0_formula`;
+- `train_wan_t2v_nova_adapter.py` supports `--wan_feature_kind pred_x0_latent`; the original MLP-L4 readout was later superseded by the 2026-05-16 Conv2d readout above after the MLP pooling path failed.
+
+Adapter-capacity note: the current MLP adapter already contains `GELU`, so future `MLP-L6-H1024`, `MLP-L4-H2048`, or cross-attention checks should be treated as low-priority capacity/readout ablations rather than the main suspected cause.
+
 ## 2026-05-12 WAN Route2 completion and setting audit
 
 The WAN Route2 branch was sanity-checked and then completed as a full 15-run ablation pack.
@@ -23,8 +82,7 @@ Interpretation:
 
 - the WAN route is live, but the absolute scores are still much worse than clean-GT VGGT;
 - the current evidence is strong enough to rule out a trivial cache-loader bug, but not strong enough to support a claim that WAN is a good geometric backbone in this probe setting;
-- the immediate follow-up moved into execution on `2026-05-12`: Route2.1 `no_noise` / `low_noise` support was implemented, and jobs `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359` were queued for layers `9,14,29`;
-- after that queue resolves, run one targeted `t499/layer09 + norm` setting before moving to pair-tiled context, I2V/FLF2V, or broader adapter changes.
+- the immediate follow-up moved into execution on `2026-05-12`: Route2.1 `no_noise` / `low_noise` support was implemented, and jobs `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359` were queued for layers `9,14,29`; this queue was later superseded by the completed 2026-05-15 state above.
 
 ## 2026-05-11 SCRREAM sequence-meta GT correction and clean VGGT rerun
 

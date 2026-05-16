@@ -111,6 +111,10 @@ DEFAULT_LAYERS = "9,14,19,24,29"
 DEFAULT_TIMESTEPS = "249,499,749"
 DEFAULT_LOW_NOISE_INDEX = 999
 WAN_TOKENS = (21, 30, 52)
+WAN_LATENT_CHANNELS = 16
+FEATURE_KIND_HIDDEN = "hidden"
+FEATURE_KIND_PRED_X0_LATENT = "pred_x0_latent"
+PAIR_TILED81_PATTERN = "half_f0_41_f1_40"
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,9 @@ class WindowSpec:
     window_end: int
     window_paths: tuple[str, ...]
     temporal_indices: tuple[int, int]
+    window_mode: str
+    synthetic_window: bool
+    pair_tiled_pattern: str
 
 
 def parse_csv_ints(value: str) -> list[int]:
@@ -138,7 +145,11 @@ def safe_sample_id(sample_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", sample_id).strip("_")
 
 
-def cache_path(cache_root: Path, timestep: int, layer: int, sample_id: str) -> Path:
+def cache_path(cache_root: Path, timestep: int, layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> Path:
+    if feature_kind == FEATURE_KIND_PRED_X0_LATENT:
+        return cache_root / f"t{int(timestep):03d}" / FEATURE_KIND_PRED_X0_LATENT / f"{safe_sample_id(sample_id)}.pt"
+    if feature_kind != FEATURE_KIND_HIDDEN:
+        raise ValueError(f"Unsupported WAN feature_kind={feature_kind!r}")
     return cache_root / f"t{int(timestep):03d}" / f"layer{int(layer):02d}" / f"{safe_sample_id(sample_id)}.pt"
 
 
@@ -166,7 +177,7 @@ def temporal_index_for_offset(offset: int) -> int:
     return 0 if offset == 0 else ((offset - 1) // 4) + 1
 
 
-def build_window_spec(meta: dict[str, Any]) -> WindowSpec:
+def build_window_spec(meta: dict[str, Any], window_mode: str = "ctx81") -> WindowSpec:
     frame_ids_raw = meta.get("frame_ids")
     frame_paths_raw = meta.get("frame_paths")
     if not frame_ids_raw or len(frame_ids_raw) != 2:
@@ -177,6 +188,34 @@ def build_window_spec(meta: dict[str, Any]) -> WindowSpec:
     frame_ids = (int(frame_ids_raw[0]), int(frame_ids_raw[1]))
     frame_paths = (str(frame_paths_raw[0]), str(frame_paths_raw[1]))
     sequence_dir = Path(frame_paths[0]).parent.parent
+    sample_id = str(
+        meta.get("sample_id")
+        or f"{meta.get('scene_id')}/{meta.get('sequence_id')}_{frame_ids[0]:06d}_{frame_ids[1]:06d}"
+    )
+    scene_id = str(meta.get("scene_id", ""))
+    sequence_id = str(meta.get("sequence_id", sequence_dir.name))
+    if window_mode == "pair_tiled81":
+        missing_pair_paths = [path for path in frame_paths if not Path(path).is_file()]
+        if missing_pair_paths:
+            raise FileNotFoundError(f"Missing pair RGB frames for {sample_id}: {missing_pair_paths}")
+        return WindowSpec(
+            sample_id=sample_id,
+            scene_id=scene_id,
+            sequence_id=sequence_id,
+            frame_ids=frame_ids,
+            frame_paths=frame_paths,
+            sequence_dir=str(sequence_dir),
+            window_start=0,
+            window_end=80,
+            window_paths=tuple([frame_paths[0]] * 41 + [frame_paths[1]] * 40),
+            temporal_indices=(0, 20),
+            window_mode="pair_tiled81",
+            synthetic_window=True,
+            pair_tiled_pattern=PAIR_TILED81_PATTERN,
+        )
+    if window_mode != "ctx81":
+        raise ValueError(f"Unsupported WAN window_mode={window_mode!r}")
+
     rgb_map = load_rgb_paths(sequence_dir)
     min_frame = min(rgb_map)
     max_frame = max(rgb_map)
@@ -197,9 +236,9 @@ def build_window_spec(meta: dict[str, Any]) -> WindowSpec:
 
     temporal_indices = tuple(temporal_index_for_offset(fid - start) for fid in frame_ids)
     return WindowSpec(
-        sample_id=str(meta.get("sample_id") or f"{meta.get('scene_id')}/{meta.get('sequence_id')}_{frame_ids[0]:06d}_{frame_ids[1]:06d}"),
-        scene_id=str(meta.get("scene_id", "")),
-        sequence_id=str(meta.get("sequence_id", sequence_dir.name)),
+        sample_id=sample_id,
+        scene_id=scene_id,
+        sequence_id=sequence_id,
         frame_ids=frame_ids,
         frame_paths=frame_paths,
         sequence_dir=str(sequence_dir),
@@ -207,6 +246,9 @@ def build_window_spec(meta: dict[str, Any]) -> WindowSpec:
         window_end=end,
         window_paths=tuple(str(rgb_map[idx]) for idx in range(start, end + 1)),
         temporal_indices=(int(temporal_indices[0]), int(temporal_indices[1])),
+        window_mode="ctx81",
+        synthetic_window=False,
+        pair_tiled_pattern="",
     )
 
 
@@ -226,6 +268,14 @@ def reshape_wan_tokens(raw: torch.Tensor) -> torch.Tensor:
     if raw.shape[1] != expected:
         raise ValueError(f"Expected {expected} WAN tokens for 480x832/81 frames, got {raw.shape[1]}")
     return raw.squeeze(0).reshape(t_tokens, h_tokens, w_tokens, raw.shape[-1]).contiguous()
+
+
+def reshape_wan_latents(raw: torch.Tensor) -> torch.Tensor:
+    if raw.ndim != 5 or raw.shape[0] != 1:
+        raise ValueError(f"Expected WAN latent shape [1,C,T,H,W], got {tuple(raw.shape)}")
+    if raw.shape[2] != WAN_TOKENS[0]:
+        raise ValueError(f"Expected {WAN_TOKENS[0]} WAN latent temporal tokens, got {raw.shape[2]}")
+    return raw.squeeze(0).permute(1, 2, 3, 0).contiguous()
 
 
 class WanT2VFeatureExtractor:
@@ -403,22 +453,40 @@ class WanT2VFeatureExtractor:
                 else:
                     transformer_latents = latents
                 transformer_dtype = self.transformer.dtype
-                output = self.transformer(
+                transformer_result = self.transformer(
                     hidden_states=transformer_latents.to(dtype=transformer_dtype),
                     timestep=t_input.expand(latents.shape[0]),
                     encoder_hidden_states=prompt_embeds.to(device=device, dtype=transformer_dtype),
                     return_dict=True,
                     output_layers=output_layers,
                 )
+                if isinstance(transformer_result, tuple):
+                    output, hidden_states = transformer_result
+                else:
+                    output, hidden_states = transformer_result, {}
+                sigma = self.scheduler.sigmas[int(effective_timestep_index)].to(
+                    device=transformer_latents.device,
+                    dtype=transformer_latents.dtype,
+                )
+                pred_x0_latents = transformer_latents - sigma * output.sample.to(dtype=transformer_latents.dtype)
                 noise_info = {
                     "noise_mode": str(noise_mode),
                     "requested_timestep_index": int(requested_timestep_index),
                     "timestep_index": int(effective_timestep_index),
                     "scheduler_timestep": float(t_input.detach().float().cpu().item()),
+                    "sigma": float(sigma.detach().float().cpu().item()),
                     "latent_noise_applied": bool(latent_noise_applied),
                     "low_noise_index": int(low_noise_index),
+                    "scheduler_class": self.scheduler.__class__.__name__,
+                    "scheduler_prediction_type": str(self.scheduler.config.prediction_type),
+                    "scheduler_predict_x0": bool(getattr(self.scheduler, "predict_x0", False)),
+                    "x0_formula": "sample_minus_sigma_model_output",
+                    "source_latent_shape": list(latents.shape),
+                    "transformer_latent_shape": list(transformer_latents.shape),
+                    "model_output_shape": list(output.sample.shape),
+                    "pred_x0_latent_shape": list(pred_x0_latents.shape),
                 }
-                return output, noise_info
+                return (output, hidden_states), pred_x0_latents, noise_info
 
         transformer = TransformerWanWithFeatureOutput.from_pretrained(
             self.model_id,
@@ -462,22 +530,29 @@ class WanT2VFeatureExtractor:
         seed: int,
         noise_mode: str,
         low_noise_index: int,
+        feature_kind: str,
     ) -> tuple[dict[int, torch.Tensor], dict[str, Any]]:
         generator = torch.Generator(device=self.device)
         generator.manual_seed(int(seed))
-        (_, hidden_states), noise_info = self.pipe(
+        (output, hidden_states), pred_x0_latents, noise_info = self.pipe(
             video=frames,
             t=int(timestep),
-            output_layers=[int(x) for x in layers],
+            output_layers=[int(x) for x in layers] if feature_kind == FEATURE_KIND_HIDDEN else [],
             prompt_embeds=self.prompt_embeds,
             generator=generator,
             noise_mode=str(noise_mode),
             low_noise_index=int(low_noise_index),
         )
+        if feature_kind == FEATURE_KIND_PRED_X0_LATENT:
+            feature = reshape_wan_latents(pred_x0_latents).detach().cpu()
+            return {-1: feature}, noise_info
+        if feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError(f"Unsupported WAN feature_kind={feature_kind!r}")
         missing = set(layers) - set(hidden_states.keys())
         if missing:
             raise RuntimeError(f"WAN did not return requested layers: {sorted(missing)}")
         features = {int(layer): reshape_wan_tokens(hidden_states[int(layer)]).detach().cpu() for layer in layers}
+        noise_info.setdefault("model_output_shape", list(output.sample.shape))
         return features, noise_info
 
 
@@ -497,6 +572,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timesteps", default=DEFAULT_TIMESTEPS)
     parser.add_argument("--layers", default=DEFAULT_LAYERS)
     parser.add_argument(
+        "--feature_kind",
+        default=FEATURE_KIND_HIDDEN,
+        choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT),
+        help=(
+            "Feature tensor to cache. hidden preserves Route2 transformer block hidden states; "
+            "pred_x0_latent caches the scheduler clean-latent estimate x0 = sample - sigma * model_output."
+        ),
+    )
+    parser.add_argument(
         "--noise_mode",
         default="normal",
         choices=("normal", "no_noise", "low_noise"),
@@ -510,6 +594,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_LOW_NOISE_INDEX,
         help="Scheduler timestep index used by no_noise/low_noise modes. Default 999 maps to the local WAN timestep 5.",
+    )
+    parser.add_argument(
+        "--window_mode",
+        default="ctx81",
+        choices=("ctx81", "pair_tiled81"),
+        help=(
+            "WAN video window construction. ctx81 uses the real 81-frame sequence context; "
+            "pair_tiled81 repeats the pair frames as 41 x f0 then 40 x f1 and extracts temporal slices 0 and 20."
+        ),
     )
     parser.add_argument("--window_size", type=int, default=81)
     parser.add_argument("--height", type=int, default=480)
@@ -538,7 +631,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     timesteps = parse_csv_ints(args.timesteps)
     layers = parse_csv_ints(args.layers)
-    if any(layer < 0 or layer > 29 for layer in layers):
+    if args.feature_kind == FEATURE_KIND_PRED_X0_LATENT:
+        if layers != [-1]:
+            logging.info("Ignoring --layers=%s for feature_kind=%s; one cache is written per timestep.", layers, args.feature_kind)
+        layers = [-1]
+    if args.feature_kind == FEATURE_KIND_HIDDEN and any(layer < 0 or layer > 29 for layer in layers):
         raise ValueError(f"WAN T2V-1.3B layer ids must be in [0,29], got {layers}")
     if any(timestep < 0 or timestep > 999 for timestep in timesteps):
         raise ValueError(f"Timesteps must index the 1000-step scheduler in [0,999], got {timesteps}")
@@ -558,10 +655,11 @@ def main() -> None:
     selected_indices = [idx for idx in range(len(metadata)) if args.split is None or splits[idx] == args.split]
     if args.max_samples and args.max_samples > 0:
         selected_indices = selected_indices[: args.max_samples]
-    specs = [build_window_spec(metadata[idx]) for idx in selected_indices]
+    specs = [build_window_spec(metadata[idx], window_mode=args.window_mode) for idx in selected_indices]
     logging.info("Validated %d WAN windows from %s", len(specs), args.adapter_data)
 
     cache_root = Path(args.output_dir)
+    source = "wan_t2v_pair_tiled81" if args.window_mode == "pair_tiled81" else "wan_t2v_video_context"
     manifest = {
         "adapter_data": str(args.adapter_data),
         "output_dir": str(cache_root),
@@ -569,8 +667,12 @@ def main() -> None:
         "prompt": args.prompt,
         "timesteps": timesteps,
         "layers": layers,
+        "feature_kind": args.feature_kind,
         "noise_mode": args.noise_mode,
         "low_noise_index": int(args.low_noise_index),
+        "window_mode": args.window_mode,
+        "synthetic_window": args.window_mode == "pair_tiled81",
+        "pair_tiled_pattern": PAIR_TILED81_PATTERN if args.window_mode == "pair_tiled81" else "",
         "window_size": args.window_size,
         "height": args.height,
         "width": args.width,
@@ -578,8 +680,9 @@ def main() -> None:
         "vae_device": args.vae_device,
         "split": args.split,
         "sample_count": len(specs),
-        "feature_shape": [3120, 1536],
-        "source": "wan_t2v_video_context",
+        "feature_shape": [3120, 1536] if args.feature_kind == FEATURE_KIND_HIDDEN else [12480, WAN_LATENT_CHANNELS],
+        "expected_feature_shape": [3120, 1536] if args.feature_kind == FEATURE_KIND_HIDDEN else [12480, WAN_LATENT_CHANNELS],
+        "source": source,
     }
     cache_root.mkdir(parents=True, exist_ok=True)
     (cache_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -593,12 +696,13 @@ def main() -> None:
     for sample_idx, spec in enumerate(specs):
         frames: list[Image.Image] | None = None
         for timestep in timesteps:
+            cache_layers = layers if args.feature_kind == FEATURE_KIND_HIDDEN else [-1]
             missing_layers = [
-                layer for layer in layers
-                if args.force or not cache_path(cache_root, timestep, layer, spec.sample_id).exists()
+                layer for layer in cache_layers
+                if args.force or not cache_path(cache_root, timestep, layer, spec.sample_id, args.feature_kind).exists()
             ]
             if not missing_layers:
-                skipped += len(layers)
+                skipped += len(cache_layers)
                 continue
             if extractor is None:
                 logging.info("Loading WAN T2V model from %s", args.model_id)
@@ -621,14 +725,17 @@ def main() -> None:
                 seed=feature_seed,
                 noise_mode=args.noise_mode,
                 low_noise_index=int(args.low_noise_index),
+                feature_kind=args.feature_kind,
             )
             for layer, full_feature in wan_features.items():
                 pair_feature = full_feature[list(spec.temporal_indices)].reshape(-1, full_feature.shape[-1]).contiguous()
-                if tuple(pair_feature.shape) != (3120, 1536):
-                    raise ValueError(f"Expected pair feature shape [3120,1536], got {tuple(pair_feature.shape)}")
-                out_path = cache_path(cache_root, timestep, layer, spec.sample_id)
+                expected_shape = (3120, 1536) if args.feature_kind == FEATURE_KIND_HIDDEN else (12480, WAN_LATENT_CHANNELS)
+                if tuple(pair_feature.shape) != expected_shape:
+                    raise ValueError(f"Expected pair feature shape {expected_shape}, got {tuple(pair_feature.shape)}")
+                out_path = cache_path(cache_root, timestep, layer, spec.sample_id, args.feature_kind)
                 cache_meta = {
                     **asdict(spec),
+                    "feature_kind": args.feature_kind,
                     "model_id": str(args.model_id),
                     "prompt": args.prompt,
                     "timestep": int(timestep),
@@ -636,12 +743,21 @@ def main() -> None:
                     "timestep_index": int(noise_info["timestep_index"]),
                     "requested_timestep_index": int(noise_info["requested_timestep_index"]),
                     "scheduler_timestep": float(noise_info["scheduler_timestep"]),
+                    "sigma": float(noise_info["sigma"]),
+                    "scheduler_class": noise_info.get("scheduler_class"),
+                    "scheduler_prediction_type": noise_info.get("scheduler_prediction_type"),
+                    "scheduler_predict_x0": noise_info.get("scheduler_predict_x0"),
+                    "x0_formula": noise_info.get("x0_formula", ""),
                     "latent_noise_applied": bool(noise_info["latent_noise_applied"]),
                     "low_noise_index": int(args.low_noise_index),
-                    "layer": int(layer),
+                    "layer": None if args.feature_kind == FEATURE_KIND_PRED_X0_LATENT else int(layer),
                     "seed": feature_seed,
-                    "source": "wan_t2v_video_context",
+                    "source": source,
                     "full_feature_shape": list(full_feature.shape),
+                    "source_latent_shape": noise_info.get("source_latent_shape"),
+                    "transformer_latent_shape": noise_info.get("transformer_latent_shape"),
+                    "model_output_shape": noise_info.get("model_output_shape"),
+                    "pred_x0_latent_shape": noise_info.get("pred_x0_latent_shape"),
                     "feature_shape": list(pair_feature.shape),
                 }
                 write_cache(out_path, pair_feature, cache_meta)

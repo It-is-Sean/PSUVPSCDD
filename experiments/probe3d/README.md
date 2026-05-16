@@ -1,6 +1,6 @@
 # NOVA3R 3D Probe
 
-## Current status override — 2026-05-12
+## Current status override — 2026-05-16
 
 The active probe state has moved to the corrected full SCRREAM branch. Important current constraints:
 
@@ -14,7 +14,7 @@ The active probe state has moved to the corrected full SCRREAM branch. Important
 - submit long data-prep and training work through `slurm/`; Slurm logs go to `slurm_out/`.
 - job `86140` completed the pre-meta-filter 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; treat it as historical after the sequence-meta GT correction.
 - job `86286` completed the VGGT layer ablation on clean sequence-meta-filtered GT under `*robustval_metafilter_seed17_vggt_layerXX`; VGGT layer `16` is the current default, with layer `24` as the main comparison point.
-- WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 runs. Best WAN is `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT, so treat the branch as exploratory and setting-sensitive. Route2.1 `no_noise` / `low_noise` code is now present and its queued job chain is `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359`.
+- WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 hidden-state runs. Best WAN is `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT, so treat the branch as exploratory and setting-sensitive. Route2.1 `no_noise` / `low_noise`, targeted `t499/layer09 + token_layernorm`, `pair_tiled81`, pred-x0 Conv2d readout, and simple hidden-grid readouts completed and did not beat old Route2 best. The next WAN branch should use a generator-preserving Perceiver / cross-attention resampler on the best hidden setting (`ctx81 normal t499/layer09`).
 - initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`.
 
 
@@ -54,7 +54,7 @@ The earlier equal-points-per-OBJ preview under `scrream_mesh_complete_n2_preview
 
 The WAN route2 probe keeps the current SCRREAM N2 adapter data and mesh-complete GT unchanged, but replaces VGGT features with precomputed WAN2.1 T2V features. This is a **video-context** representation: each two-view pair is embedded by loading WAN T2V on an 81-frame RGB window around the pair, then keeping only the two temporal slices corresponding to the original pair frames. Adapter training reads the cached WAN features and does not run WAN inside every training step.
 
-Route2 defaults:
+Route2 hidden-state defaults:
 
 - model: `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`
 - local checkpoint: `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers`
@@ -62,6 +62,10 @@ Route2 defaults:
 - code layer ids: `9,14,19,24,29` (human layers 10/15/20/25/30)
 - cache shape per sample: `[3120,1536]`
 - network proxy for repo/checkpoint fetches: `http://127.0.0.1:17890`
+
+The cache generator also supports `--feature_kind pred_x0_latent`. That mode keeps the same 81-frame WAN forward pass but caches the scheduler clean-latent estimate `x0 = sample - sigma * model_output` instead of a block hidden state. It writes `t499/pred_x0_latent/<sample>.pt`, records `sigma`, scheduler metadata, and latent/model-output shapes, and produces expected pair features of shape `[12480,16]`.
+
+The original pred-x0 MLP-L4 readout failed during training because pooling `[12480,128] -> [768,128]` triggered a PyTorch CUDA adaptive-pooling backward assert. Use `train_wan_t2v_nova_adapter.py --wan_feature_kind pred_x0_latent --adapter_type conv2d_mlp` for the current pred-x0 probe. This readout restores `[B,2,60,104,16]`, applies a small stride-2 Conv2d stem to produce `[B,3120,128]`, and then pools to NOVA scene tokens `[B,768,128]`.
 
 On this Slurm cluster the `17890` proxy is bound to login-node loopback. WAN Slurm jobs therefore open an SSH local tunnel from the compute node back to `air-server:127.0.0.1:17890`, then export `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` to the compute node's local forwarded port. Override with `WAN_PROXY_SSH_HOST`, `WAN_PROXY_REMOTE_PORT`, `WAN_PROXY_LOCAL_PORT`, or set `WAN_DISABLE_PROXY=1`.
 
@@ -73,8 +77,14 @@ Route2 result:
 
 - best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-- Route2.1 status: `no_noise` / `low_noise` WAN cache modes for layers `9,14,29` are implemented and queued; run the targeted `t499/layer09 + norm` setting after those results land
-- deferred WAN settings: `pair_tiled81` vs `ctx81`, I2V/FLF2V conditioning, and broader feature-normalization / adapter sweeps
+- Route2.1 result: `no_noise` / `low_noise` WAN cache modes for layers `9,14,29` completed, but the best clean/low-noise run (`no_noise/layer29`, `F@0.10=0.44840173`) did not beat old Route2 `t499/layer09`
+- targeted norm check: `t499/layer09 + token_layernorm` completed as job `86395`; it did not beat old Route2 best (`F@0.10=0.45476213575933216`, `pred_to_gt_p90=0.484821617603302`, `Chamfer=0.1771892917652925`)
+- pair-context check: `pair_tiled81` completed as jobs `86396 -> 86397 -> 86400 -> 86401`; it did not beat old Route2 best (`F@0.10=0.4429200036613287`, `pred_to_gt_p90=0.5104739194115003`, `Chamfer=0.16478415516515574`)
+- pred-x0 cache job `86411` completed `329/329` full-cache samples under `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81_pred_x0_latent/t499/pred_x0_latent/`
+- pred-x0 conv smoke job `86421` completed successfully on `air-node-02`, exit `0:0`, and wrote robust validation metrics
+- pred-x0 conv formal job `86422` completed on `air-node-02`, exit `0:0`, elapsed `00:52:13`; result: `F@0.10=0.41336424426176693`, `pred_to_gt_p90=0.6272750149170557`, `Chamfer-L2=0.35522504647572833`
+- structured hidden readout jobs completed on `air-node-04`: `grid2d_pool` formal job `86424` yielded `F@0.10=0.43326753863230877`, `pred_to_gt_p90=0.5651116619507471`, `Chamfer-L2=0.1759416777640581`; `grid2d_conv` formal job `86426` yielded `F@0.10=0.39855373112050535`, `pred_to_gt_p90=0.7689011543989182`, `Chamfer-L2=1.159957120815913`
+- current interpretation: pred-x0 latent, fixed 2D hidden pooling, and tiny fixed 2D conv readout do not close the WAN gap; the next useful interface audit is a learned Perceiver / cross-attention resampler from WAN hidden tokens to NOVA condition tokens
 
 Download/preflight WAN dependencies and checkpoint:
 
@@ -104,6 +114,22 @@ sbatch slurm/scrream_wan_t2v_precompute.sbatch
 Full 15-run adapter ablation:
 
 ```bash
+sbatch slurm/scrream_wan_t2v_ablation_pack_train.sbatch
+```
+
+Predicted-x0 latent smoke and formal chain:
+
+```bash
+WAN_FEATURE_KIND=pred_x0_latent \
+WAN_TIMESTEPS=499 \
+WAN_LAYERS=0 \
+WAN_MAX_SAMPLES=2 \
+sbatch slurm/scrream_wan_t2v_precompute.sbatch
+
+WAN_FEATURE_KIND=pred_x0_latent \
+WAN_ADAPTER_TYPE=conv2d_mlp \
+WAN_TIMESTEPS=499 \
+WAN_LAYERS=0 \
 sbatch slurm/scrream_wan_t2v_ablation_pack_train.sbatch
 ```
 

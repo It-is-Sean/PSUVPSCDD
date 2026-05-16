@@ -1,6 +1,6 @@
 # Probe Docs
 
-## Current canonical status — 2026-05-12
+## Current canonical status — 2026-05-16
 
 For the latest project state, read:
 
@@ -15,7 +15,7 @@ Key corrections:
 - The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
 - The old local `eval_scrream` branch is invalid for claims, but full SCRREAM is now downloaded at `~/datasets/SCRREAM`.
 - The active baseline branch is SCRREAM full-data mesh-complete VGGT adapter training on sequence-meta-filtered clean GT.
-- The active model-coverage branch is SCRREAM WAN2.1 T2V Route2, which keeps the VGGT ablation's data/GT/split/adapter/decoder/validation fixed and changes only the representation. Slurm job `86307` completed the full 15-run ablation pack; best WAN is `t499/layer09`, above zero/sample-shuffle controls but far below clean-GT VGGT. Treat the route as exploratory / setting-sensitive. Route2.1 `no_noise` / `low_noise` support is now implemented, and the smoke/full-cache/train chain `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359` was queued on `2026-05-12 22:47 CST`.
+- The active model-coverage branch is SCRREAM WAN2.1 T2V Route2, which keeps the VGGT ablation's data/GT/split/decoder/validation fixed and changes the representation/readout. Slurm job `86307` completed the full 15-run hidden-state ablation pack; best WAN is `t499/layer09`, above zero/sample-shuffle controls but far below clean-GT VGGT. Route2.1 `no_noise` / `low_noise`, `t499/layer09 + token_layernorm`, `pair_tiled81`, pred-x0 Conv2d readout, and simple hidden-grid readouts all completed and did not beat old Route2 best. Treat the route as exploratory / setting-sensitive. The next recommended follow-up is a learned Perceiver / cross-attention resampler from best WAN hidden tokens to NOVA condition tokens.
 - Long data generation and training should use `slurm/` scripts with logs in `slurm_out/`.
 - Slurm job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; `final_metrics.json` reports `best_val_chamfer_l2=0.5149603486061096`.
 - Slurm job `86149` completed the robust VGGT layer ablation on `2026-05-08`, but it used the pre-meta-filter GT and is now historical. Clean-GT VGGT ablation job `86286` completed successfully; the current default is layer `16`, with layer `24` as the main comparison point.
@@ -40,7 +40,7 @@ Full `.pt` generation is complete for both 10k and 20k target variants. The curr
 
 The clean-GT VGGT layer ablation completed as Slurm job `86286`. The current default VGGT layer is `16` (`best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`); layer `24` is the closest comparison point.
 
-The next active experiment branch is **WAN2.1 T2V Route2.1**. It keeps the same SCRREAM `.pt`, mesh-complete GT, split, MLP-L4 adapter, NOVA decoder, and robust validation as the completed Route2 grid, but changes the feature extraction setting first.
+The next active experiment branch should be **WAN2.1 T2V hidden-token learned resampling**. It keeps the same SCRREAM `.pt`, mesh-complete GT, split, NOVA decoder, and robust validation as the completed Route2 grid, but tests whether a learned Perceiver / cross-attention interface can map WAN hidden tokens into better NOVA/FM condition tokens.
 
 WAN Route2 entrypoints:
 
@@ -55,8 +55,13 @@ Route2 result:
 
 - best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-- Route2.1 implementation state: layers `9,14,29` with `no_noise` and `low_noise` cache modes are queued through `86342/86343 -> 86350/86351 -> 86357 -> 86358/86359`; after those complete, run one targeted `t499/layer09 + norm` setting
-- deferred WAN settings: `pair_tiled81` vs `ctx81`, I2V/FLF2V conditioning, and broader normalization / adapter sweeps
+- Route2.1 result: layers `9,14,29` with `no_noise` and `low_noise` completed through `86342/86343 -> 86350/86351 -> 86357 -> 86371/86372`; best clean/low-noise run did not beat old Route2 `t499/layer09`
+- normalization follow-up: `t499/layer09 + token_layernorm` completed as job `86395`; it did not beat old Route2 best (`F@0.10=0.45476213575933216`)
+- pair-context follow-up: `pair_tiled81` completed as jobs `86396 -> 86397 -> 86400 -> 86401`; it did not beat old Route2 best (`F@0.10=0.4429200036613287`)
+- pred-x0 follow-up: `pred_x0_latent` uses `x0 = sample - sigma * model_output`; full cache job `86411` wrote `329/329` files under `t499/pred_x0_latent/` with feature shape `[12480,16]`
+- original pred-x0 MLP-L4 readout failed on CUDA adaptive-pooling backward in job `86412`; it should not be treated as an experiment result
+- replacement readout: `--adapter_type conv2d_mlp` restores `[B,2,60,104,16]`, applies a stride-2 Conv2d readout to `[B,3120,128]`, and pools to `[B,768,128]`; smoke job `86421` passed and formal job `86422` completed with `F@0.10=0.41336424426176693`, `pred_to_gt_p90=0.6272750149170557`, `Chamfer-L2=0.35522504647572833`, below old WAN hidden
+- hidden-grid readouts: `--adapter_type grid2d_pool` and `--adapter_type grid2d_conv` preserve `[2,30,52]` before mapping to `[2,24,16]`; formal jobs `86424` and `86426` completed with F@0.10 `0.43326753863230877` and `0.39855373112050535`, so fixed grid pooling/conv did not close the WAN gap
 
 ### 2. What about ScanNet?
 The ScanNet v2 mesh-first line remains the diagnostic baseline.

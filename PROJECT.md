@@ -1,6 +1,6 @@
 # PROJECT.md
 
-## Current canonical state — 2026-05-12
+## Current canonical state — 2026-05-16
 
 The active branch is a server-side research workspace for the PSUVPSC3DD probe. The ScanNet experiments remain the diagnostic baseline, but the immediate training branch has moved to **full SCRREAM mesh-complete adapter training** now that the full SCRREAM tree is available at `~/datasets/SCRREAM`.
 
@@ -24,9 +24,14 @@ The current research interpretation is:
 - WAN checkpoint download/preflight completed; the local checkpoint is `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB), 2-sample WAN feature smoke job `86282` completed for timestep `749`, layer `20`, and full feature precompute jobs `86292` / `86293` / `86294` completed for the official 15-grid cache;
 - WAN cache root `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81` contains `4937` `.pt` files / about `45G`; formal training pack job `86307` completed all 15 runs on `air-node-04`, exit `0:0`, elapsed `13:36:04`;
 - WAN sanity job `86316` confirmed the cache path is non-degenerate; best formal WAN is `t499/layer09` (`F@0.10=0.46988987902779306`, `pred_to_gt_p90=0.48718947172164917`, `Chamfer=0.21040735269586244`), still far weaker than clean-GT VGGT layer `16`, so this remains a setting-sensitive exploratory branch rather than a claim-level result;
-- WAN Route2.1 is now implemented in the current workspace: `prepare_scrream_wan_t2v_feature_cache.py` supports `no_noise` / `low_noise`, `train_wan_t2v_nova_adapter.py` persists representative WAN cache metadata, and `slurm/scrream_wan_t2v_route21_pack_train.sbatch` launches the packed training grid;
-- Route2.1 jobs queued on `2026-05-12 22:47 CST`: cache smokes `86342` / `86343`, dependent full caches `86350` / `86351`, no-noise smoke train `86357`, and formal packs `86358` / `86359`;
-- after Route2.1, run one targeted `t499/layer09 + norm` setting; defer `pair_tiled81`, I2V/FLF2V, and broader normalization / adapter sweeps;
+- WAN Route2.1 clean / low-noise audit completed: cache smokes `86342` / `86343`, full caches `86350` / `86351`, smoke train `86357`, and replacement 1-GPU formal packs `86371` / `86372` all completed successfully for layers `9,14,29`;
+- Route2.1 did not beat old WAN Route2 best: best clean/low-noise result is `no_noise/layer29` with `F@0.10=0.44840173` and `pred_to_gt_p90=0.48779308`, below old `t499/layer09` `F@0.10=0.46988987902779306`;
+- `train_wan_t2v_nova_adapter.py` supports `--wan_feature_norm none|token_layernorm|sample_standardize|token_l2`, and `slurm/scrream_wan_t2v_ablation_pack_train.sbatch` passes it via `WAN_FEATURE_NORM`; targeted `t499/layer09 + token_layernorm` job `86395` completed with `F@0.10=0.45476213575933216`, below old Route2 best;
+- `pair_tiled81` versus `ctx81` completed as jobs `86396 -> 86397 -> 86400 -> 86401`; it did not beat the old Route2 best (`F@0.10=0.4429200036613287`, `pred_to_gt_p90=0.5104739194115003`), so simple feature scaling and real-context dilution are not enough to explain the WAN gap;
+- WAN predicted-x0 / denoised-latent probing is implemented: cache generation accepts `--feature_kind pred_x0_latent`, training accepts `--wan_feature_kind pred_x0_latent`, cache layout is `t499/pred_x0_latent/<sample>.pt`, and full cache job `86411` completed `329/329` samples with feature shape `[12480,16]`;
+- original MLP-L4 pred-x0 readout did not produce a formal result: `86412` failed on the first backward with a PyTorch CUDA adaptive-pooling shared-memory assert, caused by pooling the large `[12480,128]` token sequence to `[768,128]`;
+- `WanPredX0LatentConvAdapter` / `--adapter_type conv2d_mlp` is implemented for pred-x0: it restores `[B,2,60,104,16]`, applies a small stride-2 Conv2d readout to `[B,3120,128]`, then pools to NOVA scene tokens; smoke job `86421` and formal job `86422` completed, but pred-x0 conv did not beat old WAN hidden (`F@0.10=0.41336424426176693`, `pred_to_gt_p90=0.6272750149170557`);
+- `grid2d_pool` and `grid2d_conv` hidden readouts were added to preserve the WAN hidden `[2,30,52]` grid before mapping to NOVA `[2,24,16]` scene tokens; formal jobs `86424` and `86426` completed with `F@0.10=0.43326753863230877` and `0.39855373112050535`, so simple fixed 2D pooling/conv is not the missing WAN interface;
 - default formal SCRREAM / WAN ablation runs should now use `50` epochs unless an experiment explicitly overrides the epoch count;
 - local checkpoints now include `checkpoints/scene_n1/checkpoint-last.pth`, `checkpoints/scene_n2/checkpoint-last.pth`, `checkpoints/scene_ae/checkpoint-last.pth`, and `checkpoints/vggt/model.pt`.
 
@@ -118,7 +123,7 @@ Current code and Slurm entrypoints:
 
 The full 15-grid feature cache has completed, and the full 15-run WAN training pack completed as Slurm job `86307`. The first attempt `86306` failed before training due a scalar bookkeeping bug, not a data/model failure; the failed output directory was renamed with `_failed_86306`.
 
-Current interpretation: the WAN path is live, but the current T2V noisy-denoising hidden-state setting is not competitive with clean-GT VGGT. The next audit should first remove or reduce latent noise before changing the data, GT, adapter, or decoder.
+Current interpretation: the WAN path is live, but the current T2V hidden-state settings are not competitive with clean-GT VGGT. Noise level, token normalization, real 81-frame context, pred-x0 latent choice, and simple fixed grid readouts are unlikely to be the sole explanation. The next useful audit should test a learned Perceiver / cross-attention resampler from WAN hidden tokens to NOVA condition tokens.
 
 ### D. InteriorGS branch
 
@@ -181,9 +186,9 @@ The most informative current run is the short ScanNet probe, not the old long fo
 ## Immediate next step
 
 1. use clean-GT VGGT layer `16` as the current default and layer `24` as the close comparison point
-2. monitor the queued WAN Route2.1 `no_noise` / `low_noise` cache and training chain for layers `9,14,29`
-3. run a targeted `t499/layer09 + norm` setting to check whether feature scale/normalization is masking WAN quality
-4. expand SCRREAM training sample scale beyond 329 official pairs after the Route2.1 audit
+2. design the next WAN hidden readout as a generator-preserving Perceiver / cross-attention resampler on `ctx81 normal t499/layer09`
+3. keep final WAN transformer output / noise-pred-like tensor as a later tensor-choice audit, not the immediate branch
+4. expand SCRREAM training sample scale beyond 329 official pairs after the WAN readout/tensor-choice audit
 5. keep InteriorGS as a data-quality option only after SCRREAM scale/model coverage is better understood
 
 ## Supporting docs

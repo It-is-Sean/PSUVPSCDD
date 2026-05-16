@@ -39,11 +39,17 @@ else
 fi
 
 ADAPTER_DATA="${WAN_ADAPTER_DATA:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt}"
-CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81}"
 MODEL_ID="${WAN_MODEL_ID:-checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers}"
 LAYERS="${WAN_LAYERS:-9,14,19,24,29}"
+FEATURE_KIND="${WAN_FEATURE_KIND:-hidden}"
+if [[ "$FEATURE_KIND" == "pred_x0_latent" ]]; then
+  CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81_pred_x0_latent}"
+else
+  CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81}"
+fi
 NOISE_MODE="${WAN_NOISE_MODE:-normal}"
 LOW_NOISE_INDEX="${WAN_LOW_NOISE_INDEX:-999}"
+WINDOW_MODE="${WAN_WINDOW_MODE:-ctx81}"
 if [[ "$NOISE_MODE" == "normal" ]]; then
   TIMESTEPS="${WAN_TIMESTEPS:-249,499,749}"
 else
@@ -71,8 +77,10 @@ echo "  cache_dir=$CACHE_DIR"
 echo "  model_id=$MODEL_ID"
 echo "  timesteps=$TIMESTEPS"
 echo "  layers=$LAYERS"
+echo "  feature_kind=$FEATURE_KIND"
 echo "  noise_mode=$NOISE_MODE"
 echo "  low_noise_index=$LOW_NOISE_INDEX"
+echo "  window_mode=$WINDOW_MODE"
 echo "  max_samples=$MAX_SAMPLES"
 echo "  dtype=$DTYPE"
 echo "  vae_device=$VAE_DEVICE"
@@ -86,8 +94,10 @@ python -u experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py \
   --model_id "$MODEL_ID" \
   --timesteps "$TIMESTEPS" \
   --layers "$LAYERS" \
+  --feature_kind "$FEATURE_KIND" \
   --noise_mode "$NOISE_MODE" \
   --low_noise_index "$LOW_NOISE_INDEX" \
+  --window_mode "$WINDOW_MODE" \
   --dtype "$DTYPE" \
   --device "$DEVICE" \
   --vae_device "$VAE_DEVICE" \
