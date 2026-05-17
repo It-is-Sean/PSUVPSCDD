@@ -367,6 +367,109 @@ class WanHiddenCrossAttentionResamplerAdapter(nn.Module):
         return self.output_proj(self.output_norm(queries)).contiguous()
 
 
+class WanMultiTimestepAggregatorAdapter(nn.Module):
+    """
+    Multi-timestep WAN probe with tiny per-timestep branches and learned aggregation.
+
+    Input is expected as [B, T, L, C], where T enumerates diffusion timesteps for
+    the same cached WAN hidden feature layout. Each timestep passes through a small
+    branch MLP, then a learned aggregator fuses the timestep axis before the
+    historical token adapter maps the fused sequence to NOVA scene tokens.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        output_tokens: int,
+        num_timesteps: int,
+        branch_hidden_dim: int = 512,
+        branch_layers: int = 2,
+        adapter_hidden_dim: int = 1024,
+        adapter_layers: int = 4,
+        aggregation_mode: str = "softmax_gate",
+        share_branch_mlp: bool = True,
+    ) -> None:
+        super().__init__()
+        if num_timesteps < 2:
+            raise ValueError(f"num_timesteps must be >= 2, got {num_timesteps}")
+        if branch_layers < 1 or branch_layers > 4:
+            raise ValueError(f"branch_layers must be between 1 and 4, got {branch_layers}")
+        if aggregation_mode not in {"softmax_gate", "token_attention"}:
+            raise ValueError(
+                f"aggregation_mode must be 'softmax_gate' or 'token_attention', got {aggregation_mode!r}"
+            )
+        self.input_dim = int(input_dim)
+        self.output_dim = int(output_dim)
+        self.output_tokens = int(output_tokens)
+        self.num_timesteps = int(num_timesteps)
+        self.branch_hidden_dim = int(branch_hidden_dim)
+        self.branch_layers = int(branch_layers)
+        self.adapter_hidden_dim = int(adapter_hidden_dim)
+        self.adapter_layers = int(adapter_layers)
+        self.aggregation_mode = str(aggregation_mode)
+        self.share_branch_mlp = bool(share_branch_mlp)
+
+        if self.share_branch_mlp:
+            self.branch_mlps = nn.ModuleList([self._build_branch_mlp()])  # shared across T
+        else:
+            self.branch_mlps = nn.ModuleList([self._build_branch_mlp() for _ in range(self.num_timesteps)])
+
+        if self.aggregation_mode == "softmax_gate":
+            self.timestep_logits = nn.Parameter(torch.zeros(self.num_timesteps))
+            self.token_gate = None
+        else:
+            self.timestep_logits = None
+            self.token_gate = nn.Linear(self.branch_hidden_dim, 1)
+
+        self.downstream_adapter = VGGTToNovaAdapter(
+            input_dim=self.branch_hidden_dim,
+            output_dim=self.output_dim,
+            output_tokens=self.output_tokens,
+            hidden_dim=self.adapter_hidden_dim,
+            adapter_layers=self.adapter_layers,
+        )
+
+    def _build_branch_mlp(self) -> nn.Sequential:
+        layers: list[nn.Module] = []
+        dim = self.input_dim
+        for _ in range(self.branch_layers):
+            layers.extend([
+                nn.Linear(dim, self.branch_hidden_dim),
+                nn.GELU(),
+                nn.LayerNorm(self.branch_hidden_dim),
+            ])
+            dim = self.branch_hidden_dim
+        return nn.Sequential(*layers)
+
+    def _project_timesteps(self, tokens: torch.Tensor) -> torch.Tensor:
+        projected = []
+        for idx in range(self.num_timesteps):
+            branch = self.branch_mlps[0] if self.share_branch_mlp else self.branch_mlps[idx]
+            projected.append(branch(tokens[:, idx].float()))
+        return torch.stack(projected, dim=1)
+
+    def _aggregate_timesteps(self, projected: torch.Tensor) -> torch.Tensor:
+        if self.aggregation_mode == "softmax_gate":
+            weights = torch.softmax(self.timestep_logits, dim=0).view(1, self.num_timesteps, 1, 1)
+            return (projected * weights).sum(dim=1)
+        scores = self.token_gate(projected).squeeze(-1)
+        weights = torch.softmax(scores, dim=1).unsqueeze(-1)
+        return (projected * weights).sum(dim=1)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        if tokens.ndim != 4:
+            raise ValueError(f"Expected multi-timestep WAN tokens [B,T,L,C], got {tuple(tokens.shape)}")
+        if tokens.shape[1] != self.num_timesteps or tokens.shape[-1] != self.input_dim:
+            raise ValueError(
+                "Unexpected multi-timestep WAN token shape: "
+                f"expected [B,{self.num_timesteps},L,{self.input_dim}], got {tuple(tokens.shape)}"
+            )
+        projected = self._project_timesteps(tokens)
+        aggregated = self._aggregate_timesteps(projected)
+        return self.downstream_adapter(aggregated)
+
+
 class CrossAttentionBlock(nn.Module):
     def __init__(self, dim: int, num_heads: int, mlp_ratio: float = 2.0, gated: bool = True) -> None:
         super().__init__()

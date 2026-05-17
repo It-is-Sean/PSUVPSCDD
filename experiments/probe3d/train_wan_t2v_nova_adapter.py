@@ -32,6 +32,7 @@ from probe.adapter import (
     WanHiddenCrossAttentionResamplerAdapter,
     WanHiddenGrid2DConvAdapter,
     WanHiddenGrid2DPoolAdapter,
+    WanMultiTimestepAggregatorAdapter,
     WanPredX0LatentConvAdapter,
 )
 from vggt_nova_adapter_common_raw import (
@@ -74,6 +75,7 @@ ADAPTER_TYPE_CONV2D_MLP = "conv2d_mlp"
 ADAPTER_TYPE_GRID2D_POOL = "grid2d_pool"
 ADAPTER_TYPE_GRID2D_CONV = "grid2d_conv"
 ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER = "wan_cross_attn_resampler"
+ADAPTER_TYPE_WAN_MULTI_TIMESTEP = "wan_multi_timestep_aggregator"
 
 
 def safe_cache_sample_id(sample_id: str) -> str:
@@ -126,6 +128,16 @@ def normalize_wan_features(features: torch.Tensor, mode: str = "none", eps: floa
     raise ValueError(f"Unsupported WAN feature normalization mode {mode!r}")
 
 
+def parse_wan_timesteps(value: str | None, fallback: int) -> tuple[int, ...]:
+    if value is None or not str(value).strip():
+        return (int(fallback),)
+    parts = [part.strip() for part in str(value).split(",")]
+    timesteps = tuple(int(part) for part in parts if part)
+    if not timesteps:
+        raise ValueError("Expected at least one WAN timestep")
+    return timesteps
+
+
 def get_wan_t2v_cached_features(
     batch,
     device,
@@ -170,6 +182,65 @@ def get_wan_t2v_cached_features(
     return normalize_wan_features(selected, mode=feature_norm, eps=feature_norm_eps).contiguous()
 
 
+def get_multi_timestep_wan_t2v_cached_features(
+    batch,
+    device,
+    feature_cache_dir: str,
+    wan_timesteps: tuple[int, ...],
+    wan_layer: int,
+    feature_mode: str = "cache",
+    shuffle_seed: int = 17,
+    feature_norm: str = "none",
+    feature_norm_eps: float = 1e-6,
+    feature_kind: str = FEATURE_KIND_HIDDEN,
+) -> torch.Tensor:
+    selected = [
+        get_wan_t2v_cached_features(
+            batch=batch,
+            device=device,
+            feature_cache_dir=feature_cache_dir,
+            wan_timestep=int(timestep),
+            wan_layer=int(wan_layer),
+            feature_mode=feature_mode,
+            shuffle_seed=shuffle_seed,
+            feature_norm="none",
+            feature_norm_eps=feature_norm_eps,
+            feature_kind=feature_kind,
+        )
+        for timestep in wan_timesteps
+    ]
+    stacked = torch.stack(selected, dim=1).contiguous()
+    return normalize_wan_features(stacked, mode=feature_norm, eps=feature_norm_eps).contiguous()
+
+
+def select_wan_features(batch, device, args) -> torch.Tensor:
+    if args.adapter_type == ADAPTER_TYPE_WAN_MULTI_TIMESTEP:
+        return get_multi_timestep_wan_t2v_cached_features(
+            batch=batch,
+            device=device,
+            feature_cache_dir=args.wan_feature_cache_dir,
+            wan_timesteps=args.wan_timesteps,
+            wan_layer=args.wan_layer,
+            feature_mode=args.wan_feature_mode,
+            shuffle_seed=args.wan_feature_shuffle_seed,
+            feature_norm=args.wan_feature_norm,
+            feature_norm_eps=args.wan_feature_norm_eps,
+            feature_kind=args.wan_feature_kind,
+        )
+    return get_wan_t2v_cached_features(
+        batch=batch,
+        device=device,
+        feature_cache_dir=args.wan_feature_cache_dir,
+        wan_timestep=args.wan_timestep,
+        wan_layer=args.wan_layer,
+        feature_mode=args.wan_feature_mode,
+        shuffle_seed=args.wan_feature_shuffle_seed,
+        feature_norm=args.wan_feature_norm,
+        feature_norm_eps=args.wan_feature_norm_eps,
+        feature_kind=args.wan_feature_kind,
+    )
+
+
 def read_wan_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> dict:
     path = wan_cache_path(Path(feature_cache_dir), int(wan_timestep), int(wan_layer), str(sample_id), feature_kind)
     if not path.exists():
@@ -207,18 +278,7 @@ def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, out
                 break
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
-            selected = get_wan_t2v_cached_features(
-                batch,
-                device,
-                args.wan_feature_cache_dir,
-                args.wan_timestep,
-                args.wan_layer,
-                args.wan_feature_mode,
-                args.wan_feature_shuffle_seed,
-                args.wan_feature_norm,
-                args.wan_feature_norm_eps,
-                args.wan_feature_kind,
-            )
+            selected = select_wan_features(batch, device, args)
             tokens = adapter_module(selected)
             pred = sample_decoder(decoder, tokens, args.num_queries, meta["fm_step_size"], args.seed + batch_idx, images.shape[1])
             target = get_targets(
@@ -340,10 +400,15 @@ def parse_args():
             ADAPTER_TYPE_GRID2D_POOL,
             ADAPTER_TYPE_GRID2D_CONV,
             ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER,
+            ADAPTER_TYPE_WAN_MULTI_TIMESTEP,
         ),
     )
     parser.add_argument("--adapter_heads", type=int, default=8)
     parser.add_argument("--adapter_mlp_ratio", type=float, default=2.0)
+    parser.add_argument("--wan_branch_hidden_dim", type=int, default=512)
+    parser.add_argument("--wan_branch_layers", type=int, default=2)
+    parser.add_argument("--wan_timestep_aggregation", default="softmax_gate", choices=("softmax_gate", "token_attention"))
+    parser.add_argument("--wan_branch_sharing", default="shared", choices=("shared", "per_timestep"))
     parser.add_argument("--max_steps", type=int, default=3000)
     parser.add_argument("--save_every", type=int, default=500)
     parser.add_argument("--val_every", type=int, default=500)
@@ -373,6 +438,7 @@ def parse_args():
     parser.add_argument("--image_root_map", default=None)
     parser.add_argument("--wan_feature_cache_dir", required=True)
     parser.add_argument("--wan_timestep", type=int, default=749)
+    parser.add_argument("--wan_timesteps", default=None, help="Comma-separated WAN timesteps for multi-timestep aggregation, e.g. 249,499,749.")
     parser.add_argument("--wan_layer", type=int, default=20)
     parser.add_argument("--wan_feature_kind", default=FEATURE_KIND_HIDDEN, choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT))
     parser.add_argument("--wan_feature_mode", default="cache", choices=("cache", "zero", "sample_shuffle"))
@@ -423,10 +489,15 @@ def main():
             raise ValueError("--adapter_type grid2d_conv is only supported with --wan_feature_kind hidden")
         if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
             raise ValueError("--adapter_type wan_cross_attn_resampler is only supported with --wan_feature_kind hidden")
+        if args.adapter_type == ADAPTER_TYPE_WAN_MULTI_TIMESTEP and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--adapter_type wan_multi_timestep_aggregator is only supported with --wan_feature_kind hidden")
         if args.debug_one_batch:
             args.max_steps = 1
             args.save_every = 1
             args.val_every = 1
+        args.wan_timesteps = parse_wan_timesteps(args.wan_timesteps, args.wan_timestep)
+        if args.adapter_type == ADAPTER_TYPE_WAN_MULTI_TIMESTEP and len(args.wan_timesteps) < 2:
+            raise ValueError("--adapter_type wan_multi_timestep_aggregator requires at least two timesteps")
         set_seed(args.seed)
         device = dist_ctx["device"] if dist_ctx["enabled"] else resolve_device(args.device)
         is_main = dist_ctx["is_main"]
@@ -473,32 +544,36 @@ def main():
         first_batch = next(iter(train_loader))
         first_batch = move_batch_to_device(first_batch, device)
         first_images = images_from_batch(first_batch)
-        selected = get_wan_t2v_cached_features(
-            first_batch,
-            device,
-            args.wan_feature_cache_dir,
-            args.wan_timestep,
-            args.wan_layer,
-            args.wan_feature_mode,
-            args.wan_feature_shuffle_seed,
-            args.wan_feature_norm,
-            args.wan_feature_norm_eps,
-            args.wan_feature_kind,
-        )
+        selected = select_wan_features(first_batch, device, args)
         if is_main:
             print("Feature backbone: wan_t2v_cache")
-            print(f"Requested WAN T2V timestep/layer: {args.wan_timestep}/{args.wan_layer}")
+            if args.adapter_type == ADAPTER_TYPE_WAN_MULTI_TIMESTEP:
+                print(f"Requested WAN T2V timesteps/layer: {list(args.wan_timesteps)}/{args.wan_layer}")
+            else:
+                print(f"Requested WAN T2V timestep/layer: {args.wan_timestep}/{args.wan_layer}")
             print(f"WAN feature kind: {args.wan_feature_kind}")
             print(f"WAN feature mode: {args.wan_feature_mode}")
             print(f"WAN feature norm: {args.wan_feature_norm} eps={args.wan_feature_norm_eps}")
             print(f"Selected WAN feature shape: {tuple(selected.shape)}")
-        wan_cache_metadata = read_wan_cache_metadata(
-            args.wan_feature_cache_dir,
-            args.wan_timestep,
-            args.wan_layer,
-            first_batch["scene_ids"][0],
-            args.wan_feature_kind,
-        )
+        if args.adapter_type == ADAPTER_TYPE_WAN_MULTI_TIMESTEP:
+            wan_cache_metadata = [
+                read_wan_cache_metadata(
+                    args.wan_feature_cache_dir,
+                    timestep,
+                    args.wan_layer,
+                    first_batch["scene_ids"][0],
+                    args.wan_feature_kind,
+                )
+                for timestep in args.wan_timesteps
+            ]
+        else:
+            wan_cache_metadata = read_wan_cache_metadata(
+                args.wan_feature_cache_dir,
+                args.wan_timestep,
+                args.wan_layer,
+                first_batch["scene_ids"][0],
+                args.wan_feature_kind,
+            )
 
         if args.adapter_type == "mlp":
             adapter = VGGTToNovaAdapter(
@@ -560,6 +635,19 @@ def main():
                 num_heads=args.adapter_heads,
                 mlp_ratio=args.adapter_mlp_ratio,
             )
+        elif args.adapter_type == ADAPTER_TYPE_WAN_MULTI_TIMESTEP:
+            adapter = WanMultiTimestepAggregatorAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                num_timesteps=len(args.wan_timesteps),
+                branch_hidden_dim=args.wan_branch_hidden_dim,
+                branch_layers=args.wan_branch_layers,
+                adapter_hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+                aggregation_mode=args.wan_timestep_aggregation,
+                share_branch_mlp=args.wan_branch_sharing == "shared",
+            )
         else:
             raise ValueError(f"Unsupported adapter_type={args.adapter_type!r}")
         adapter = adapter.to(device)
@@ -584,12 +672,10 @@ def main():
         assert_only_adapter_trainable(unwrap_adapter(probe_model), None, decoder)
 
         config = vars(args).copy()
-        config.update(
-            {
-                "feature_backbone": "wan_t2v_cache",
-                "selected_feature_shape": list(selected.shape),
-                "wan_cache_metadata": {
-                    key: wan_cache_metadata.get(key)
+        if isinstance(wan_cache_metadata, list):
+            config_wan_cache_metadata = [
+                {
+                    key: metadata.get(key)
                     for key in (
                         "noise_mode",
                         "timestep_index",
@@ -609,16 +695,54 @@ def main():
                         "pred_x0_latent_shape",
                         "feature_shape",
                     )
-                    if key in wan_cache_metadata
-                },
+                    if key in metadata
+                }
+                for metadata in wan_cache_metadata
+            ]
+        else:
+            config_wan_cache_metadata = {
+                key: wan_cache_metadata.get(key)
+                for key in (
+                    "noise_mode",
+                    "timestep_index",
+                    "requested_timestep_index",
+                    "scheduler_timestep",
+                    "sigma",
+                    "scheduler_class",
+                    "scheduler_prediction_type",
+                    "scheduler_predict_x0",
+                    "x0_formula",
+                    "latent_noise_applied",
+                    "low_noise_index",
+                    "feature_kind",
+                    "source_latent_shape",
+                    "transformer_latent_shape",
+                    "model_output_shape",
+                    "pred_x0_latent_shape",
+                    "feature_shape",
+                )
+                if key in wan_cache_metadata
+            }
+        config.update(
+            {
+                "feature_backbone": "wan_t2v_cache",
+                "selected_feature_shape": list(selected.shape),
+                "wan_timestep": int(args.wan_timestep),
+                "wan_timesteps": list(args.wan_timesteps),
+                "wan_cache_metadata": config_wan_cache_metadata,
                 "adapter_type": args.adapter_type,
                 "adapter_heads": args.adapter_heads,
                 "adapter_mlp_ratio": args.adapter_mlp_ratio,
+                "wan_branch_hidden_dim": args.wan_branch_hidden_dim,
+                "wan_branch_layers": args.wan_branch_layers,
+                "wan_timestep_aggregation": args.wan_timestep_aggregation,
+                "wan_branch_sharing": args.wan_branch_sharing,
                 "adapter_param_count": count_parameters(unwrap_adapter(probe_model)),
                 "adapter_conv_readout_shape": list(getattr(unwrap_adapter(probe_model), "conv_readout_shape", ())),
                 "adapter_grid_input_shape": list(getattr(unwrap_adapter(probe_model), "grid_input_shape", ())),
                 "adapter_grid_readout_shape": list(getattr(unwrap_adapter(probe_model), "grid_readout_shape", ())),
                 "adapter_resampler_shape": list(getattr(unwrap_adapter(probe_model), "resampler_shape", ())),
+                "adapter_num_timesteps": int(getattr(unwrap_adapter(probe_model), "num_timesteps", 0)),
                 "loss_type": args.loss_type,
                 "chamfer_weight": args.chamfer_weight,
                 "scannet_complete_points": args.scannet_complete_points,
@@ -681,18 +805,7 @@ def main():
                 batch = next(data_iter)
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
-            selected = get_wan_t2v_cached_features(
-                batch,
-                device,
-                args.wan_feature_cache_dir,
-                args.wan_timestep,
-                args.wan_layer,
-                args.wan_feature_mode,
-                args.wan_feature_shuffle_seed,
-                args.wan_feature_norm,
-                args.wan_feature_norm_eps,
-                args.wan_feature_kind,
-            )
+            selected = select_wan_features(batch, device, args)
             target = get_targets(batch, meta["query_source"], max_points=args.num_queries, norm_mode=meta.get("norm_mode", "none"))
 
             optimizer.zero_grad(set_to_none=True)
@@ -877,6 +990,7 @@ def main():
             final_metrics = {
                 "feature_backbone": "wan_t2v_cache",
                 "wan_timestep": int(args.wan_timestep),
+                "wan_timesteps": list(args.wan_timesteps),
                 "wan_layer": int(args.wan_layer),
                 "wan_feature_kind": args.wan_feature_kind,
                 "wan_feature_mode": args.wan_feature_mode,
