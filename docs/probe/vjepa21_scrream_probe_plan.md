@@ -71,25 +71,15 @@ Interpretation:
 
 ## Window Definition
 
-The logical window definition should follow the WAN branch.
+The V-JEPA branch should use pair-local context directly.
 
-### Raw logical windows
-
-- `ctx81`
-  - build a real 81-frame context window around the SCRREAM pair
-- `pair_tiled81`
-  - synthetic 81-frame window using `41 x f0 + 40 x f1`
-
-### Backbone input clips
-
-V-JEPA 2.1 does not need to consume the full 81 frames directly.
+There is no requirement to inherit WAN's `ctx81` logical window.
 
 Instead:
 
-1. build the raw 81-frame logical window
-2. deterministically map it to the backbone input length
-3. run the frozen encoder
-4. keep only the temporal tubelet slices relevant to the pair
+1. build a pair-local clip directly from the source sequence
+2. run the frozen encoder on that clip
+3. keep only the temporal tubelet slices relevant to the pair
 
 ## Precise Clip Modes
 
@@ -101,20 +91,20 @@ Instead:
 
 ### `ctx_anchor16`
 
-- build `ctx81`
-- deterministically select a `16`-frame clip anchored on the pair
-- preserve a stable mapping from raw frame ids to selected clip positions
+- build a pair-local `16`-frame clip directly from the source sequence
+- use `8` frames ending at `f0`, then `8` frames starting at `f1`
+- keep the pair at fixed positions `7` and `8`
 
 ### `ctx_shuffle16`
 
-- start from the exact `ctx_anchor16` selected frames
+- start from the exact `ctx_anchor16` selected local frames
 - keep pair frame positions fixed
 - deterministically shuffle only the remaining context frames
 
 ### `ctx_anchor32`
 
-- same logic as `ctx_anchor16`
-- select `32` frames instead of `16`
+- same local-anchor logic as `ctx_anchor16`
+- use `16` frames ending at `f0`, then `16` frames starting at `f1`
 
 ## V-JEPA 2.1 Feature Definition
 
@@ -214,7 +204,7 @@ Reuse from the current probe stack:
 The cache script should:
 
 1. read SCRREAM adapter metadata
-2. build `ctx81` or `pair_tiled81`
+2. build the requested pair-local clip directly from the source sequence
 3. derive one of:
    - `pair_exact16`
    - `ctx_anchor16`

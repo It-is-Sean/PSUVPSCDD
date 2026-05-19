@@ -42,8 +42,6 @@ DEFAULT_MODEL_NAME = "vjepa2_1_vit_large_384"
 DEFAULT_CROP_SIZE = 384
 DEFAULT_PATCH_SIZE = 16
 DEFAULT_TUBELET_SIZE = 2
-RAW_WINDOW_SIZE = 81
-
 MODE_PAIR_EXACT16 = "pair_exact16"
 MODE_CTX_ANCHOR16 = "ctx_anchor16"
 MODE_CTX_SHUFFLE16 = "ctx_shuffle16"
@@ -64,13 +62,8 @@ class WindowSpec:
     frame_ids: tuple[int, int]
     frame_paths: tuple[str, str]
     sequence_dir: str
-    window_start: int
-    window_end: int
-    window_paths: tuple[str, ...]
-    temporal_indices: tuple[int, int]
-    window_mode: str
-    synthetic_window: bool
-    pair_tiled_pattern: str
+    min_frame: int
+    max_frame: int
 
 
 def safe_sample_id(sample_id: str) -> str:
@@ -99,13 +92,7 @@ def load_rgb_paths(sequence_dir: Path) -> dict[int, Path]:
     return mapping
 
 
-def temporal_index_for_offset(offset: int) -> int:
-    if offset < 0 or offset >= RAW_WINDOW_SIZE:
-        raise ValueError(f"Frame offset {offset} is outside an 81-frame window")
-    return offset
-
-
-def build_window_spec(meta: dict[str, Any], use_pair_tiled: bool = False) -> WindowSpec:
+def build_window_spec(meta: dict[str, Any]) -> WindowSpec:
     frame_ids_raw = meta.get("frame_ids")
     frame_paths_raw = meta.get("frame_paths")
     if not frame_ids_raw or len(frame_ids_raw) != 2:
@@ -119,44 +106,15 @@ def build_window_spec(meta: dict[str, Any], use_pair_tiled: bool = False) -> Win
     sample_id = str(
         meta.get("sample_id")
         or f"{meta.get('scene_id')}/{meta.get('sequence_id')}_{frame_ids[0]:06d}_{frame_ids[1]:06d}"
-    )
+        )
     scene_id = str(meta.get("scene_id", ""))
     sequence_id = str(meta.get("sequence_id", sequence_dir.name))
-    if use_pair_tiled:
-        missing_pair_paths = [path for path in frame_paths if not Path(path).is_file()]
-        if missing_pair_paths:
-            raise FileNotFoundError(f"Missing pair RGB frames for {sample_id}: {missing_pair_paths}")
-        return WindowSpec(
-            sample_id=sample_id,
-            scene_id=scene_id,
-            sequence_id=sequence_id,
-            frame_ids=frame_ids,
-            frame_paths=frame_paths,
-            sequence_dir=str(sequence_dir),
-            window_start=0,
-            window_end=80,
-            window_paths=tuple([frame_paths[0]] * 41 + [frame_paths[1]] * 40),
-            temporal_indices=(0, 20),
-            window_mode="pair_tiled81",
-            synthetic_window=True,
-            pair_tiled_pattern="half_f0_41_f1_40",
-        )
-
     rgb_map = load_rgb_paths(sequence_dir)
     min_frame = min(rgb_map)
     max_frame = max(rgb_map)
-    if max_frame - min_frame + 1 < RAW_WINDOW_SIZE:
-        raise ValueError(f"Sequence {sequence_dir} has fewer than 81 numbered frames")
-
-    mid = (frame_ids[0] + frame_ids[1]) // 2
-    start = mid - 40
-    start = max(min_frame, min(start, max_frame - 80))
-    end = start + 80
-    if not (start <= frame_ids[0] <= end and start <= frame_ids[1] <= end):
-        raise ValueError(f"Pair {frame_ids} cannot fit in 81-frame window [{start}, {end}] for {sequence_dir}")
-    missing = [idx for idx in range(start, end + 1) if idx not in rgb_map]
-    if missing:
-        raise FileNotFoundError(f"Missing RGB frames in {sequence_dir}: first missing ids {missing[:8]}")
+    missing_pair_paths = [path for path in frame_paths if not Path(path).is_file()]
+    if missing_pair_paths:
+        raise FileNotFoundError(f"Missing pair RGB frames for {sample_id}: {missing_pair_paths}")
     return WindowSpec(
         sample_id=sample_id,
         scene_id=scene_id,
@@ -164,16 +122,8 @@ def build_window_spec(meta: dict[str, Any], use_pair_tiled: bool = False) -> Win
         frame_ids=frame_ids,
         frame_paths=frame_paths,
         sequence_dir=str(sequence_dir),
-        window_start=start,
-        window_end=end,
-        window_paths=tuple(str(rgb_map[idx]) for idx in range(start, end + 1)),
-        temporal_indices=(
-            temporal_index_for_offset(frame_ids[0] - start),
-            temporal_index_for_offset(frame_ids[1] - start),
-        ),
-        window_mode="ctx81",
-        synthetic_window=False,
-        pair_tiled_pattern="",
+        min_frame=min_frame,
+        max_frame=max_frame,
     )
 
 
@@ -184,23 +134,39 @@ def _linspace_indices(start: int, end: int, count: int) -> list[int]:
     return [int(round(float(v.item()))) for v in values]
 
 
+def _contiguous_block_indices(anchor_frame: int, block_size: int, min_frame: int, max_frame: int, align: str) -> list[int]:
+    if align == "end":
+        start = anchor_frame - (block_size - 1)
+        start = max(min_frame, min(start, max_frame - block_size + 1))
+    elif align == "start":
+        start = anchor_frame
+        start = max(min_frame, min(start, max_frame - block_size + 1))
+    else:
+        raise ValueError(f"Unsupported align={align!r}")
+    return list(range(start, start + block_size))
+
+
 def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) -> tuple[list[str], dict[str, Any]]:
     if clip_mode == MODE_PAIR_EXACT16:
         clip_paths = [spec.frame_paths[0]] * 8 + [spec.frame_paths[1]] * 8
         anchor_positions = (7, 8)
         raw_indices = [spec.frame_ids[0]] * 8 + [spec.frame_ids[1]] * 8
+        window_paths_raw = clip_paths[:]
+        window_size_raw = len(window_paths_raw)
+        pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
     else:
-        raw_paths = list(spec.window_paths)
+        rgb_map = load_rgb_paths(Path(spec.sequence_dir))
         total_frames = 16 if clip_mode in {MODE_CTX_ANCHOR16, MODE_CTX_SHUFFLE16} else 32
         left = total_frames // 2
         right = total_frames - left
-        start_raw = spec.window_start
-        end_raw = spec.window_end
-        left_ids = _linspace_indices(start_raw, spec.frame_ids[0], left)
-        right_ids = _linspace_indices(spec.frame_ids[1], end_raw, right)
+        left_ids = _contiguous_block_indices(spec.frame_ids[0], left, spec.min_frame, spec.max_frame, align="end")
+        right_ids = _contiguous_block_indices(spec.frame_ids[1], right, spec.min_frame, spec.max_frame, align="start")
         raw_indices = left_ids + right_ids
-        clip_paths = [raw_paths[idx - spec.window_start] for idx in raw_indices]
+        clip_paths = [str(rgb_map[idx]) for idx in raw_indices]
         anchor_positions = (left - 1, left)
+        window_paths_raw = clip_paths[:]
+        window_size_raw = len(window_paths_raw)
+        pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
         if clip_mode == MODE_CTX_SHUFFLE16:
             generator = random.Random(int(shuffle_seed))
             keep = {anchor_positions[0], anchor_positions[1]}
@@ -215,8 +181,11 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
             clip_paths = shuffled_paths
             raw_indices = shuffled_indices
     meta = {
+        "window_size_raw": int(window_size_raw),
+        "window_paths_raw": list(window_paths_raw),
         "resampled_num_frames": len(clip_paths),
         "resampled_frame_indices": raw_indices,
+        "pair_temporal_indices_raw": pair_temporal_indices_raw,
         "pair_temporal_indices_resampled": [int(anchor_positions[0]), int(anchor_positions[1])],
     }
     return clip_paths, meta
@@ -336,7 +305,6 @@ def main() -> None:
     if not selected_indices:
         raise ValueError("No SCRREAM samples matched the requested split/max_samples filter")
 
-    use_pair_tiled = args.window_mode == MODE_PAIR_EXACT16
     num_frames = 32 if args.window_mode == MODE_CTX_ANCHOR32 else 16
     device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
     encoder = load_vjepa21_encoder(args.model_name, args.checkpoint_path, num_frames=num_frames, device=device)
@@ -344,7 +312,7 @@ def main() -> None:
 
     for item_idx, sample_idx in enumerate(selected_indices):
         meta = metadata[sample_idx]
-        spec = build_window_spec(meta, use_pair_tiled=use_pair_tiled)
+        spec = build_window_spec(meta)
         clip_paths, clip_meta = build_clip_from_window(
             spec,
             clip_mode=args.window_mode,
@@ -368,13 +336,13 @@ def main() -> None:
             "scene_id": spec.scene_id,
             "sequence_id": spec.sequence_id,
             "window_mode": args.window_mode,
-            "window_size_raw": RAW_WINDOW_SIZE,
-            "window_paths_raw": list(spec.window_paths),
+            "window_size_raw": int(clip_meta["window_size_raw"]),
+            "window_paths_raw": list(clip_meta["window_paths_raw"]),
             "resampled_num_frames": int(clip_meta["resampled_num_frames"]),
             "resampled_frame_indices": list(clip_meta["resampled_frame_indices"]),
             "pair_frame_ids": list(spec.frame_ids),
             "pair_frame_paths": list(spec.frame_paths),
-            "pair_temporal_indices_raw": list(spec.temporal_indices),
+            "pair_temporal_indices_raw": list(clip_meta["pair_temporal_indices_raw"]),
             "pair_temporal_indices_resampled": list(clip_meta["pair_temporal_indices_resampled"]),
             "tubelet_size": int(args.tubelet_size),
             "crop_size": int(args.crop_size),
