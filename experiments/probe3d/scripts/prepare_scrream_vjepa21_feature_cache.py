@@ -64,6 +64,7 @@ MODE_CTX_ANCHOR16 = "ctx_anchor16"
 MODE_CTX_SHUFFLE16 = "ctx_shuffle16"
 MODE_CTX_ANCHOR32 = "ctx_anchor32"
 MODE_CTX_ANCHOR64 = "ctx_anchor64"
+MODE_CTX_CONTIG81 = "ctx_contig81"
 MODE_CTX_WAN16 = "ctx_wan16"
 MODE_CTX_WAN64 = "ctx_wan64"
 WINDOW_MODES = (
@@ -72,6 +73,7 @@ WINDOW_MODES = (
     MODE_CTX_SHUFFLE16,
     MODE_CTX_ANCHOR32,
     MODE_CTX_ANCHOR64,
+    MODE_CTX_CONTIG81,
     MODE_CTX_WAN16,
     MODE_CTX_WAN64,
 )
@@ -276,13 +278,15 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
         window_paths_raw = clip_paths[:]
         window_size_raw = len(window_paths_raw)
         pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
-    elif clip_mode in {MODE_CTX_WAN16, MODE_CTX_WAN64}:
+    elif clip_mode in {MODE_CTX_WAN16, MODE_CTX_WAN64, MODE_CTX_CONTIG81}:
         rgb_map = load_rgb_paths(Path(spec.sequence_dir))
         raw81_indices = _build_ctx81_indices(spec)
         if clip_mode == MODE_CTX_WAN16:
             raw_indices = _sample_ctx81_to_wan16(raw81_indices, spec.frame_ids)
-        else:
+        elif clip_mode == MODE_CTX_WAN64:
             raw_indices = _sample_ctx81_uniform(raw81_indices, spec.frame_ids, count=64)
+        else:
+            raw_indices = list(raw81_indices)
         clip_paths = [str(rgb_map[idx]) for idx in raw_indices]
         anchor_positions = _find_anchor_positions(raw_indices, spec.frame_ids)
         window_paths_raw = [str(rgb_map[idx]) for idx in raw81_indices]
@@ -450,6 +454,8 @@ def main() -> None:
         num_frames = 32
     elif args.window_mode == MODE_CTX_ANCHOR64:
         num_frames = 64
+    elif args.window_mode == MODE_CTX_CONTIG81:
+        num_frames = 81
     elif args.window_mode == MODE_CTX_WAN64:
         num_frames = 64
     else:
