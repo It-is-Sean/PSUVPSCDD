@@ -146,11 +146,27 @@ def _contiguous_block_indices(anchor_frame: int, block_size: int, min_frame: int
     return list(range(start, start + block_size))
 
 
+def _find_anchor_positions(raw_indices: list[int], frame_ids: tuple[int, int]) -> tuple[int, int]:
+    f0, f1 = int(frame_ids[0]), int(frame_ids[1])
+    try:
+        f0_pos = max(idx for idx, frame_id in enumerate(raw_indices) if int(frame_id) == f0)
+    except ValueError as exc:
+        raise ValueError(f"Could not locate f0={f0} in clip indices {raw_indices}") from exc
+    try:
+        f1_pos = min(idx for idx, frame_id in enumerate(raw_indices) if int(frame_id) == f1 and idx >= f0_pos)
+    except ValueError:
+        try:
+            f1_pos = min(idx for idx, frame_id in enumerate(raw_indices) if int(frame_id) == f1)
+        except ValueError as exc:
+            raise ValueError(f"Could not locate f1={f1} in clip indices {raw_indices}") from exc
+    return int(f0_pos), int(f1_pos)
+
+
 def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) -> tuple[list[str], dict[str, Any]]:
     if clip_mode == MODE_PAIR_EXACT16:
         clip_paths = [spec.frame_paths[0]] * 8 + [spec.frame_paths[1]] * 8
-        anchor_positions = (7, 8)
         raw_indices = [spec.frame_ids[0]] * 8 + [spec.frame_ids[1]] * 8
+        anchor_positions = _find_anchor_positions(raw_indices, spec.frame_ids)
         window_paths_raw = clip_paths[:]
         window_size_raw = len(window_paths_raw)
         pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
@@ -163,7 +179,7 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
         right_ids = _contiguous_block_indices(spec.frame_ids[1], right, spec.min_frame, spec.max_frame, align="start")
         raw_indices = left_ids + right_ids
         clip_paths = [str(rgb_map[idx]) for idx in raw_indices]
-        anchor_positions = (left - 1, left)
+        anchor_positions = _find_anchor_positions(raw_indices, spec.frame_ids)
         window_paths_raw = clip_paths[:]
         window_size_raw = len(window_paths_raw)
         pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
