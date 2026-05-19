@@ -63,6 +63,7 @@ MODE_PAIR_EXACT16 = "pair_exact16"
 MODE_CTX_ANCHOR16 = "ctx_anchor16"
 MODE_CTX_SHUFFLE16 = "ctx_shuffle16"
 MODE_CTX_ANCHOR32 = "ctx_anchor32"
+MODE_CTX_ANCHOR64 = "ctx_anchor64"
 MODE_CTX_WAN16 = "ctx_wan16"
 MODE_CTX_WAN64 = "ctx_wan64"
 WINDOW_MODES = (
@@ -70,6 +71,7 @@ WINDOW_MODES = (
     MODE_CTX_ANCHOR16,
     MODE_CTX_SHUFFLE16,
     MODE_CTX_ANCHOR32,
+    MODE_CTX_ANCHOR64,
     MODE_CTX_WAN16,
     MODE_CTX_WAN64,
 )
@@ -288,7 +290,14 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
         pair_temporal_indices_raw = [raw81_indices.index(int(spec.frame_ids[0])), raw81_indices.index(int(spec.frame_ids[1]))]
     else:
         rgb_map = load_rgb_paths(Path(spec.sequence_dir))
-        total_frames = 16 if clip_mode in {MODE_CTX_ANCHOR16, MODE_CTX_SHUFFLE16} else 32
+        if clip_mode in {MODE_CTX_ANCHOR16, MODE_CTX_SHUFFLE16}:
+            total_frames = 16
+        elif clip_mode == MODE_CTX_ANCHOR32:
+            total_frames = 32
+        elif clip_mode == MODE_CTX_ANCHOR64:
+            total_frames = 64
+        else:
+            raise ValueError(f"Unsupported V-JEPA clip_mode={clip_mode!r}")
         left = total_frames // 2
         right = total_frames - left
         left_ids = _contiguous_block_indices(spec.frame_ids[0], left, spec.min_frame, spec.max_frame, align="end")
@@ -439,6 +448,8 @@ def main() -> None:
 
     if args.window_mode == MODE_CTX_ANCHOR32:
         num_frames = 32
+    elif args.window_mode == MODE_CTX_ANCHOR64:
+        num_frames = 64
     elif args.window_mode == MODE_CTX_WAN64:
         num_frames = 64
     else:
