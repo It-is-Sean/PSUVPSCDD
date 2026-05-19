@@ -10,3 +10,9 @@
 	path = third_party/VidFM3D
 	url = https://github.com/zxhuang1698/VidFM3D.git
 	branch = main
+[submodule "third_party/jepa"]
+	path = third_party/jepa
+	url = https://github.com/facebookresearch/jepa.git
+[submodule "third_party/vjepa2"]
+	path = third_party/vjepa2
+	url = https://github.com/facebookresearch/vjepa2.git

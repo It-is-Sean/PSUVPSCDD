@@ -1,0 +1,11 @@
+# Extra dependencies for SCRREAM V-JEPA 2.1 feature extraction only.
+# Keep these separate from the root nova3r requirements to avoid changing
+# existing VGGT/NOVA/WAN adapter training environments unexpectedly.
+timm>=1.0
+einops>=0.8
+decord>=0.6
+braceexpand>=0.1.7
+webdataset>=0.2.100
+beartype>=0.19
+pandas>=2.0
+opencv-python>=4.10
