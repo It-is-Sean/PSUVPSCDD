@@ -65,6 +65,7 @@ MODE_CTX_SHUFFLE16 = "ctx_shuffle16"
 MODE_CTX_ANCHOR32 = "ctx_anchor32"
 MODE_CTX_ANCHOR64 = "ctx_anchor64"
 MODE_CTX_CONTIG81 = "ctx_contig81"
+MODE_CTX_F0F1_SPAN = "ctx_f0f1_span"
 MODE_CTX_WAN16 = "ctx_wan16"
 MODE_CTX_WAN64 = "ctx_wan64"
 WINDOW_MODES = (
@@ -74,6 +75,7 @@ WINDOW_MODES = (
     MODE_CTX_ANCHOR32,
     MODE_CTX_ANCHOR64,
     MODE_CTX_CONTIG81,
+    MODE_CTX_F0F1_SPAN,
     MODE_CTX_WAN16,
     MODE_CTX_WAN64,
 )
@@ -278,6 +280,21 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
         window_paths_raw = clip_paths[:]
         window_size_raw = len(window_paths_raw)
         pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
+    elif clip_mode == MODE_CTX_F0F1_SPAN:
+        rgb_map = load_rgb_paths(Path(spec.sequence_dir))
+        start = min(int(spec.frame_ids[0]), int(spec.frame_ids[1]))
+        end = max(int(spec.frame_ids[0]), int(spec.frame_ids[1]))
+        missing = [idx for idx in range(start, end + 1) if idx not in rgb_map]
+        if missing:
+            raise FileNotFoundError(
+                f"Missing RGB frames in contiguous f0-f1 span for {spec.sample_id}: first missing ids {missing[:8]}"
+            )
+        raw_indices = list(range(start, end + 1))
+        clip_paths = [str(rgb_map[idx]) for idx in raw_indices]
+        anchor_positions = _find_anchor_positions(raw_indices, spec.frame_ids)
+        window_paths_raw = clip_paths[:]
+        window_size_raw = len(window_paths_raw)
+        pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
     elif clip_mode in {MODE_CTX_WAN16, MODE_CTX_WAN64, MODE_CTX_CONTIG81}:
         rgb_map = load_rgb_paths(Path(spec.sequence_dir))
         raw81_indices = _build_ctx81_indices(spec)
@@ -455,6 +472,8 @@ def main() -> None:
     elif args.window_mode == MODE_CTX_ANCHOR64:
         num_frames = 64
     elif args.window_mode == MODE_CTX_CONTIG81:
+        num_frames = 81
+    elif args.window_mode == MODE_CTX_F0F1_SPAN:
         num_frames = 81
     elif args.window_mode == MODE_CTX_WAN64:
         num_frames = 64
