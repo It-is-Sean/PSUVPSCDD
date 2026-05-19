@@ -64,12 +64,14 @@ MODE_CTX_ANCHOR16 = "ctx_anchor16"
 MODE_CTX_SHUFFLE16 = "ctx_shuffle16"
 MODE_CTX_ANCHOR32 = "ctx_anchor32"
 MODE_CTX_WAN16 = "ctx_wan16"
+MODE_CTX_WAN64 = "ctx_wan64"
 WINDOW_MODES = (
     MODE_PAIR_EXACT16,
     MODE_CTX_ANCHOR16,
     MODE_CTX_SHUFFLE16,
     MODE_CTX_ANCHOR32,
     MODE_CTX_WAN16,
+    MODE_CTX_WAN64,
 )
 
 
@@ -232,6 +234,38 @@ def _sample_ctx81_to_wan16(raw81_indices: list[int], frame_ids: tuple[int, int])
     return [int(x) for x in merged]
 
 
+def _sample_ctx81_uniform(raw81_indices: list[int], frame_ids: tuple[int, int], count: int) -> list[int]:
+    if count <= 0:
+        raise ValueError(f"count must be positive, got {count}")
+    if count > len(raw81_indices):
+        raise ValueError(f"Cannot sample {count} frames from ctx81 window of size {len(raw81_indices)}")
+    base_positions = _linspace_indices(0, len(raw81_indices) - 1, count)
+    selected_positions = sorted({int(x) for x in base_positions})
+    while len(selected_positions) < count:
+        for pos in range(len(raw81_indices)):
+            if pos not in selected_positions:
+                selected_positions.append(pos)
+                if len(selected_positions) == count:
+                    break
+    f0_pos = raw81_indices.index(int(frame_ids[0]))
+    f1_pos = raw81_indices.index(int(frame_ids[1]))
+    if f0_pos not in selected_positions:
+        worst = min(selected_positions, key=lambda pos: min(abs(pos - f0_pos), abs(pos - f1_pos)))
+        selected_positions.remove(worst)
+        selected_positions.append(f0_pos)
+    if f1_pos not in selected_positions:
+        worst = min(selected_positions, key=lambda pos: abs(pos - f1_pos))
+        if worst == f0_pos and len(selected_positions) > 1:
+            worst = min([pos for pos in selected_positions if pos != f0_pos], key=lambda pos: abs(pos - f1_pos))
+        selected_positions.remove(worst)
+        selected_positions.append(f1_pos)
+    selected_positions = sorted(selected_positions)
+    sampled = [int(raw81_indices[pos]) for pos in selected_positions]
+    if int(frame_ids[0]) not in sampled or int(frame_ids[1]) not in sampled:
+        raise ValueError(f"ctx_uniform sampling failed to retain pair frames {frame_ids} in sampled indices {sampled}")
+    return sampled
+
+
 def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) -> tuple[list[str], dict[str, Any]]:
     if clip_mode == MODE_PAIR_EXACT16:
         clip_paths = [spec.frame_paths[0]] * 8 + [spec.frame_paths[1]] * 8
@@ -240,10 +274,13 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
         window_paths_raw = clip_paths[:]
         window_size_raw = len(window_paths_raw)
         pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
-    elif clip_mode == MODE_CTX_WAN16:
+    elif clip_mode in {MODE_CTX_WAN16, MODE_CTX_WAN64}:
         rgb_map = load_rgb_paths(Path(spec.sequence_dir))
         raw81_indices = _build_ctx81_indices(spec)
-        raw_indices = _sample_ctx81_to_wan16(raw81_indices, spec.frame_ids)
+        if clip_mode == MODE_CTX_WAN16:
+            raw_indices = _sample_ctx81_to_wan16(raw81_indices, spec.frame_ids)
+        else:
+            raw_indices = _sample_ctx81_uniform(raw81_indices, spec.frame_ids, count=64)
         clip_paths = [str(rgb_map[idx]) for idx in raw_indices]
         anchor_positions = _find_anchor_positions(raw_indices, spec.frame_ids)
         window_paths_raw = [str(rgb_map[idx]) for idx in raw81_indices]
@@ -400,7 +437,12 @@ def main() -> None:
     if not selected_indices:
         raise ValueError("No SCRREAM samples matched the requested split/max_samples filter")
 
-    num_frames = 32 if args.window_mode == MODE_CTX_ANCHOR32 else 16
+    if args.window_mode == MODE_CTX_ANCHOR32:
+        num_frames = 32
+    elif args.window_mode == MODE_CTX_WAN64:
+        num_frames = 64
+    else:
+        num_frames = 16
     device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
     encoder = load_vjepa21_encoder(args.model_name, args.checkpoint_path, num_frames=num_frames, device=device)
     cache_root = Path(args.output_dir)
