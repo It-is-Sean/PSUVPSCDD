@@ -9,12 +9,29 @@ import logging
 import random
 import re
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 from PIL import Image
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"You are using `torch.load` with `weights_only=False`",
+    category=FutureWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"Importing from timm\.models\.layers is deprecated",
+    category=FutureWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"`torch\.backends\.cuda\.sdp_kernel\(\)` is deprecated",
+    category=FutureWarning,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

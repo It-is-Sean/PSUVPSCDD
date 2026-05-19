@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import re
+import warnings
 from pathlib import Path
 
 import torch
@@ -22,6 +23,17 @@ try:
     import swanlab
 except ImportError:
     swanlab = None
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"You are using `torch.load` with `weights_only=False`",
+    category=FutureWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message=r"`torch\.cuda\.amp\.GradScaler\(args\.\.\.\)` is deprecated",
+    category=FutureWarning,
+)
 
 from probe.adapter import VGGTToNovaAdapter
 from vggt_nova_adapter_common_raw import (
