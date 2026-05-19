@@ -247,7 +247,7 @@ def parse_args():
     parser.add_argument("--image_root_map", default=None)
     parser.add_argument("--vjepa_feature_cache_dir", required=True)
     parser.add_argument("--vjepa_window_mode", required=True)
-    parser.add_argument("--vjepa_model_name", default="vjepa2_1_vit_base_384")
+    parser.add_argument("--vjepa_model_name", default="vjepa2_1_vit_large_384")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb_project", default="PSUVPSC3DD")
     parser.add_argument("--wandb_entity", default=None)

@@ -32,8 +32,8 @@ for mode in "${WINDOW_MODES[@]}"; do
     python -u experiments/probe3d/scripts/prepare_scrream_vjepa21_feature_cache.py
     --adapter_data "${VJEPA21_ADAPTER_DATA:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt}"
     --output_dir "${VJEPA21_CACHE_ROOT:-experiments/probe3d/feature_cache/scrream_vjepa21}"
-    --checkpoint_path "${VJEPA21_CHECKPOINT:-checkpoints/vjepa2/vjepa2_1_vitb_dist_vitG_384.pt}"
-    --model_name "${VJEPA21_MODEL_NAME:-vjepa2_1_vit_base_384}"
+    --checkpoint_path "${VJEPA21_CHECKPOINT:-checkpoints/vjepa2/vjepa2_1_vitl_dist_vitG_384.pt}"
+    --model_name "${VJEPA21_MODEL_NAME:-vjepa2_1_vit_large_384}"
     --window_mode "$mode"
     --max_samples "${VJEPA21_MAX_SAMPLES:-0}"
     --device "${VJEPA21_DEVICE:-cuda}"

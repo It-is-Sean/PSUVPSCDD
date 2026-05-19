@@ -113,7 +113,7 @@ for mode in "${WINDOW_MODES[@]}"; do
       --nova_ckpt "$NOVA_CKPT" \
       --vjepa_feature_cache_dir "$CACHE_DIR" \
       --vjepa_window_mode "$mode" \
-      --vjepa_model_name "${VJEPA21_MODEL_NAME:-vjepa2_1_vit_base_384}" \
+      --vjepa_model_name "${VJEPA21_MODEL_NAME:-vjepa2_1_vit_large_384}" \
       --adapter_layers "${VJEPA21_ADAPTER_LAYERS:-4}" \
       --adapter_hidden_dim "${VJEPA21_ADAPTER_HIDDEN_DIM:-1024}" \
       --loss_type "${VJEPA21_LOSS_TYPE:-nova_flow}" \
