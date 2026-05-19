@@ -1,12 +1,13 @@
 # PSUVPSC3DD / Probe Workspace
 
-## Current canonical status — 2026-05-16
+## Current canonical status — 2026-05-19
 
 This branch is now a **server-side research workspace**. The source of truth is:
 
 - `PROPOSAL.md`
 - `PROJECT.md`
 - `experiments/probe3d/README.md`
+- `docs/probe/wan_summary_2026-05-19.md`
 - `docs/probe/handoff_2026-05-07.md`
 - `docs/probe/handoff_2026-05-03.md`
 - `docs/probe/experiment_plan.md`
@@ -23,7 +24,7 @@ Important corrections that override older sections below:
 8. **SCRREAM baseline status:** job `86140` completed the old 20k/500k SCRREAM mesh-complete MLP baseline, and job `86149` completed the pre-meta-filter robust VGGT layer ablation. A sequence-meta-filtered clean GT was regenerated on `2026-05-10`; clean-GT VGGT job `86286` completed successfully on `2026-05-11`. The current clean-GT default is VGGT layer `16`, with layer `24` as the main comparison point.
 9. **Local weights:** NOVA3R `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; non-WAN Slurm scripts default network proxy variables to `http://127.0.0.1:7896`.
 10. **Third-party source:** VGGT, Wan2.1, and VidFM3D are Git submodules under `third_party/`; run `git submodule update --init --recursive` after a fresh clone. Wan2.1 / WAN probe dependencies stay separate from the root env.
-11. **WAN Route2 status:** the active representation probe is WAN2.1 T2V video-context features on the same clean SCRREAM `.pt`, split, adapter/decoder family, and robust validation setup as the VGGT ablation. Slurm job `86307` completed the full 15-run hidden-state ablation pack successfully; best WAN remains `t499/layer09` with `F@0.10=0.46988987902779306`, above zero/sample-shuffle controls but far below clean-GT VGGT layer `16`. Route2.1 `no_noise` / `low_noise`, `t499/layer09 + token_layernorm`, `pair_tiled81`, pred-x0 latent with Conv2d readout, and simple hidden-grid readouts all completed and did not beat that baseline. The current recommended WAN next step is a generator-preserving Perceiver / cross-attention resampler on the best hidden setting (`ctx81 normal t499/layer09`). WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890` through the Slurm SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`.
+11. **WAN Route2 status:** WAN is now a paused / closed model-coverage branch as of `2026-05-19`; see `docs/probe/wan_summary_2026-05-19.md`. It used WAN2.1 T2V video-context features on the same clean SCRREAM `.pt`, split, adapter/decoder family, and robust validation setup as the VGGT ablation. The learned hidden CA resampler was the only clearly positive WAN readout: historical best was `t499/layer14 + wan_cross_attn_resampler` with `F@0.10=0.5012956284974035`, `pred_to_gt_p90=0.4229188362757365`, `Chamfer=0.10908368105689685`, and user visual inspection improved. Repeated settings were closer to `0.49`, and L4 CA `t249/layer14` reached `F@0.10=0.4919946248489035`. WAN remains below clean-GT VGGT layer `16` (`F@0.10=0.6860468604251301`), and no broad WAN sweeps are recommended before testing the next backbone. WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890` through the Slurm SSH tunnel logic in `slurm/scrream_wan_*`.
 
 This repository is currently a **research execution workspace** around a simple question:
 
@@ -64,7 +65,7 @@ The current target source is **mesh-complete**, not the earlier eval-subset pseu
 - the output `.pt` is consumed through `--dataset scrream_adapter --data_root <adapter.pt>`
 - for `nova_flow`, SCRREAM targets are normalized with the NOVA `scene_ae` checkpoint `norm_mode`; the local `scene_ae` config reports `median_3`
 
-Current data / job state recorded on 2026-05-12 16:32 CST:
+Current data / job state recorded on 2026-05-18:
 
 - 10k original adapter data exists:
   - `experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17.pt`
@@ -93,7 +94,7 @@ Current data / job state recorded on 2026-05-12 16:32 CST:
 
 ### 2. WAN2.1 T2V Route2 line
 
-The WAN Route2 branch is the active model-coverage expansion after the clean-GT VGGT rerun. The old completed VGGT ablation is pre-meta-filter history, so WAN comparisons should use the clean-GT layer `16` default and layer `24` comparison point. WAN should be read as a **video-context representation probe**, not a pair-only image backbone probe.
+The WAN Route2 branch was the first post-VGGT model-coverage expansion after the clean-GT VGGT rerun. It is now paused after the `2026-05-19` audit; use `docs/probe/wan_summary_2026-05-19.md` for the frozen conclusion. The old completed VGGT ablation is pre-meta-filter history, so WAN comparisons should use the clean-GT layer `16` default and layer `24` comparison point. WAN should be read as a **video-context representation probe**, not a pair-only image backbone probe.
 
 Fixed setting:
 
@@ -109,15 +110,17 @@ Implementation entrypoints:
 - dependency pins: `experiments/probe3d/requirements-wan-t2v.txt`
 - feature cache: `experiments/probe3d/scripts/prepare_scrream_wan_t2v_feature_cache.py`
 - training: `experiments/probe3d/train_wan_t2v_nova_adapter.py`
-- Slurm: `slurm/scrream_wan_t2v_download.sbatch`, `slurm/scrream_wan_t2v_precompute.sbatch`, `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`
+- Slurm: `slurm/scrream_wan_t2v_download.sbatch`, `slurm/scrream_wan_t2v_precompute.sbatch`, `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`, `slurm/scrream_wan_t2v_multilayer_pack_train.sbatch`, `slurm/scrream_wan_t2v_multitime_pack_train.sbatch`
 
-Status on `2026-05-12 16:32 CST`: the WAN checkpoint is downloaded under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB). Full feature precompute completed as jobs `86292`, `86293`, and `86294`, writing `4937` `.pt` files / about `45G` under `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81`. The first full training attempt `86306` failed immediately on a reduced-loss float `.item()` bug; the training script was patched, and replacement pack job `86307` completed all 15 runs on `air-node-04`, exit `0:0`, elapsed `13:36:04`.
+Status on `2026-05-19 14:14 CST`: the WAN checkpoint is downloaded under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB). Full feature precompute completed as jobs `86292`, `86293`, and `86294`, writing `4937` `.pt` files / about `45G` under `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81`. The full WAN audit through hidden CA, Route2.1, pair_tiled81, latent tensors, grid readouts, multi-source fusion, FLF2V hidden, gated CA, and L4 capacity has completed. Final summary is in `docs/probe/wan_summary_2026-05-19.md`.
 
-WAN Route2 result:
+WAN Route2 and readout results:
 
-- best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+- old best WAN hidden baseline: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+- historical best WAN interface: `t499/layer14 + wan_cross_attn_resampler`, `best_val_fscore_tau_0.10=0.5012956284974035`, `best_val_pred_to_gt_p90=0.4229188362757365`, `best_val_chamfer_l2=0.10908368105689685`
+- CA-resampler stability / full-grid checks: low-LR `t499/layer14` rerun `86453` was negative (`F@0.10=0.4292316005720653`); full-grid job `86468` completed all `249/499/749 x 9/14/19/24/29` settings and found the best repeated F-score at `t249/layer14` (`0.48913902331806663`) and the best repeated p90 / Chamfer at `t249/layer09` (`0.410525918006897` / `0.11981592203179996`)
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-- interpretation: WAN Route2 is live but setting-limited; current T2V noisy-denoising hidden states are not competitive geometry features under the fixed adapter setting
+- interpretation: WAN Route2 is live but setting-limited; learned WAN-to-NOVA token resampling helps materially, but WAN is still not competitive with clean-GT VGGT
 - Route2.1 `no_noise` / `low_noise` audit completed for layers `9,14,29`; best clean/low-noise result (`no_noise/layer29`, `F@0.10=0.44840173`) did not beat old Route2 best `t499/layer09`
 - feature-normalization follow-up: `t499/layer09 + token_layernorm` completed as job `86395`; it improved Chamfer slightly but did not beat the baseline F-score (`F@0.10=0.45476213575933216`)
 - pair-context follow-up: `pair_tiled81` completed as jobs `86396 -> 86397 -> 86400 -> 86401`; it improved Chamfer but worsened F-score / pred-to-GT precision (`F@0.10=0.4429200036613287`)
@@ -125,8 +128,29 @@ WAN Route2 result:
 - original MLP-L4 pred-x0 readout is not a completed result: `86412` failed on a PyTorch CUDA adaptive-pooling backward assert from pooling the large `[12480,128]` token sequence
 - replacement readout: `--adapter_type conv2d_mlp` reshapes `[B,12480,16]` to `[B,2,60,104,16]`, Conv2d stride-2 reads out `[B,3120,128]`, then pools to NOVA scene tokens `[B,768,128]`; smoke job `86421` and formal job `86422` completed, but the formal result (`F@0.10=0.41336424426176693`, `pred_to_gt_p90=0.6272750149170557`) did not beat old WAN hidden
 - structured hidden readout follow-up: `--adapter_type grid2d_pool` and `--adapter_type grid2d_conv` keep the `[2,30,52]` hidden grid before pooling to `[2,24,16]`; formal jobs `86424` and `86426` completed with `F@0.10=0.43326753863230877` and `0.39855373112050535`, so simple grid pooling/conv does not close the WAN gap
+- learned hidden readout follow-up: `--adapter_type wan_cross_attn_resampler` keeps WAN hidden as `[2,30,52]`, adds temporal/row/column position embeddings, and maps to `768` NOVA query tokens by cross-attention; layer sweep `86429` found the historical best WAN at `t499/layer14`, but exact repeats are unstable
+- full-grid interpretation: `t249/layer09` and `t249/layer14` are the most reliable CA-resampler settings from job `86468`; `layer24/29` remain weak and should not be prioritized as single-layer probes
+- multi-source learned readout follow-up: `--adapter_type wan_cross_attn_multilayer_resampler` with `--wan_layers` and `--adapter_type wan_cross_attn_multitime_resampler` with `--wan_timesteps` are implemented in `train_wan_t2v_nova_adapter.py`. Multi-layer `t249 layers 9+14` reached `F@0.10=0.46487238144059545`, `t249 layers 9+14+19` reached `0.4724058254433277`, and multi-timestep `249+499+749/layer14` reached `0.45213117002164466`; none beat the single-layer full-grid baselines, so simple hidden fusion is stopped for now
+- model-output latent follow-up: `--feature_kind model_output_latent` / `--wan_feature_kind model_output_latent` caches raw WAN transformer `output.sample` latent slices with expected shape `[12480,16]`. Conv2d formal job `86536` reached `F@0.10=0.4199299775478907`; learned latent-CA formal job `86540` reached `0.4289946537162989`. Both were negative versus hidden CA baselines.
+- hidden CA stability/capacity follow-up: seed23 standard CA reached `0.48706357506233194` at `t249/layer14` and `0.4591392560862819` at `t499/layer14`; gated CA reached `0.4505522726705196` at `t249/layer14` and `0.4866296484297818` at `t499/layer14`; L4 CA reached `0.4919946248489035` at `t249/layer14` and `0.46280321302050603` at `t499/layer14`. L4 `t249/layer14` is a small repeated-F improvement over full-grid `t249/layer14`, but gated CA and `t499` repeats do not justify expansion.
 
-### 3. ScanNet v2 line
+### 3. WAN2.1 FLF2V Route
+
+FLF2V is a separate high-cost branch. Do not describe it as T2V `ctx81`: its window mode is **`pair_endpoint81`**, where slot `0` is the first SCRREAM pair frame, slot `80` is the second pair frame, and slots `1..79` linearly sample frame IDs between them. The extracted pair tokens are the endpoint temporal hidden slices `(0, 20)`, aligned with the first/last-frame conditioning.
+
+First setting:
+
+- model: `Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers`
+- local checkpoint target: `checkpoints/wan2.1/Wan2.1-FLF2V-14B-720P-diffusers`
+- cache root: `experiments/probe3d/feature_cache/scrream_wan_flf2v14b_pair_endpoint81_480`
+- feature cache: `experiments/probe3d/scripts/prepare_scrream_wan_flf2v_feature_cache.py`
+- Slurm: `slurm/scrream_wan_flf2v_download.sbatch`, `slurm/scrream_wan_flf2v_precompute.sbatch`, `slurm/scrream_wan_flf2v_train.sbatch`
+- first formal probe: `t249/layer14`, empty prompt, `--adapter_type wan_cross_attn_resampler`, same clean SCRREAM `.pt`, NOVA `scene_ae`, `nova_flow`, robust validation, 50 epochs
+- expected 480P pair feature shape: `[3120,5120]`; if 480P is rejected and the run falls back to 720P, expected shape is `[7200,5120]`
+
+Implementation status on `2026-05-19`: local static checks passed, `WanHiddenCrossAttentionResamplerAdapter` accepts metadata-derived hidden grids and `input_dim=5120`, and local window-only smoke validated all `329` SCRREAM samples. Download/preflight retry `86500`, feature-cache shard jobs `86515` / `86516` / `86517` / `86518`, smoke train `86519`, and formal train `86520` all completed. The cache has `329/329` files under `t249/layer14`, shape `[3120,5120]`. Formal FLF2V result is `F@0.10=0.42897984457682026`, `pred_to_gt_p90=0.5051772321263949`, and `Chamfer=0.14052311765650907`; it is weaker than T2V CA baselines, so do not expand FLF2V hidden broadly yet.
+
+### 4. ScanNet v2 line
 
 The ScanNet v2 mesh-first extension remains the current diagnostic baseline.
 
@@ -142,7 +166,7 @@ The training structure remains aligned with the proposal direction:
 - NOVA3R-style decoder / flow-matching training path
 - reliable **complete-GT style** supervision
 
-### 4. InteriorGS line
+### 5. InteriorGS line
 
 InteriorGS remains a plausible future data-quality migration path, but it is no longer the immediate next step. The current priority is to inspect the completed SCRREAM full mesh-complete 20k / 500k MLP baseline before choosing the next data-quality migration or adapter branch.
 
@@ -218,9 +242,10 @@ The practical near-term plan is:
 
 1. keep the old `eval_scrream` correction in mind and do not reuse those invalid claims
 2. use clean-GT VGGT layer `16` as the current default representation, with layer `24` as the closest comparison point
-3. plan the next WAN hidden readout test as a Perceiver / cross-attention resampler on `ctx81 normal t499/layer09`, rather than more fixed pooling/conv variants
-4. expand SCRREAM training sample scale beyond the current 329 official pairs after the WAN readout/tensor-choice audit
-5. keep the fixed-30 ScanNet metrics as a failure-mode baseline
+3. treat WAN as paused after `docs/probe/wan_summary_2026-05-19.md`; optional WAN follow-ups are appendix-only
+4. prepare the next backbone under the same clean SCRREAM / NOVA probe protocol, starting with a small layer/readout smoke rather than a broad ablation
+5. expand SCRREAM training sample scale beyond the current 329 official pairs after the next-backbone pilot is defined
+6. keep the fixed-30 ScanNet metrics as a failure-mode baseline
 
 ## Documentation map
 

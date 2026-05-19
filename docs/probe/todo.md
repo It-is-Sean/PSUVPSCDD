@@ -1,6 +1,6 @@
 # TODO
 
-## Active now — 2026-05-16
+## Active now — 2026-05-19
 
 ### SCRREAM full mesh-complete adapter line
 - [x] download full SCRREAM to `~/datasets/SCRREAM`
@@ -91,7 +91,7 @@
 - [x] conclude simple noise-level, token-normalization, and pair-context-dilution explanations do not explain the WAN gap
 - [x] record generator-preserving WAN representation-search plan; VidFM3D is a reference, but this project keeps NOVA/FM as the probe generator
 - [x] treat A (`ctx81 normal t499/layer09 block hidden + MLP-L4 -> NOVA/FM`) as the completed baseline, not a new run
-- [ ] later tensor-choice audit B: final WAN transformer output / noise-pred-like tensor -> MLP-L4 -> NOVA/FM
+- [x] implement tensor-choice audit B: final WAN transformer output / model-output latent (`--feature_kind model_output_latent`, `--wan_feature_kind model_output_latent`) -> `conv2d_mlp` -> NOVA/FM
 - [x] implement C: predicted clean latent / x0 estimate -> MLP-L4 -> NOVA/FM (`--feature_kind pred_x0_latent`, `--wan_feature_kind pred_x0_latent`)
 - [x] finish pred-x0 full cache job `86411` for all 329 SCRREAM samples; cache files under `t499/pred_x0_latent/` have feature shape `[12480,16]` and metadata fields `sigma`, `x0_formula`, and latent/model-output shapes
 - [x] record original pred-x0 MLP readout failure: `86412` failed on PyTorch CUDA adaptive-pooling backward and should not be treated as a result
@@ -102,10 +102,64 @@
 - [x] implement and run fixed hidden `grid2d_conv` readout (`86425` / `86426`); result did not beat old hidden or `grid2d_pool`
 - [x] implement D adapter: current block hidden -> learned cross-attention / Perceiver-style resampler -> NOVA/FM (`--adapter_type wan_cross_attn_resampler`)
 - [x] submit D smoke/formal chain for `ctx81 normal t499/layer09`, adapter layers `2`, hidden dim `512`, heads `8`: smoke `86427`, formal `86428` with `afterok:86427`
-- [ ] inspect D smoke job `86427` and formal job `86428` metrics / `val_visual_40960`
-- [ ] after D, optionally test E: multi-layer hidden fusion (`9+19+29`) -> resampler -> NOVA/FM
-- [ ] defer F: I2V / FLF2V condition-side features -> resampler -> NOVA/FM until T2V tensor/readout audits are understood
+- [x] inspect D smoke job `86427` and formal job `86428` metrics: `86428` nearly matches old WAN hidden F@0.10 and improves p90 / Chamfer
+- [x] submit D layer sweep job `86429` for `t499 x layers 14,19,24,29`; layer09 is covered by `86428`
+- [x] inspect D layer sweep job `86429`: layer14 is the historical WAN peak with `F@0.10=0.5012956284974035`, `pred_to_gt_p90=0.4229188362757365`, `Chamfer=0.10908368105689685`
+- [x] inspect CA resampler layer14 `val_visual_40960/step_011500`; user confirmed visual improvement
+- [x] submit low-LR stability rerun for CA resampler `t499/layer14` as job `86444` (`WAN_LR=5e-5`, `WAN_VAL_EVERY=250`)
+- [x] record that low-LR job `86444` was cancelled because its `128G` memory request blocked scheduling
+- [x] inspect replacement low-LR rerun job `86453`: negative result for `t499/layer14` (`F@0.10=0.4292316005720653`, `pred_to_gt_p90=0.5338096991181374`, `Chamfer=0.15617707930505276`)
+- [x] inspect CA-resampler full-grid job `86468`: completed all `249/499/749 x 9/14/19/24/29`; best repeated F@0.10 is `t249/layer14=0.48913902331806663`, best repeated p90 / Chamfer is `t249/layer09=0.410525918006897 / 0.11981592203179996`
+- [ ] inspect full-grid `val_visual_40960` outputs for `t249/layer09` and `t249/layer14`
+- [x] implement multi-layer hidden fusion (`--adapter_type wan_cross_attn_multilayer_resampler`, `--wan_layers`) and Slurm launcher `slurm/scrream_wan_t2v_multilayer_pack_train.sbatch`
+- [x] run multi-layer smoke/formal jobs: smoke `86483`, formal `86485` for `t249 layers 9+14`, and formal `86487` for `t249 layers 9+14+19`
+- [x] record multi-layer conclusion: `9+14` F@0.10 `0.46487238144059545` and `9+14+19` F@0.10 `0.4724058254433277` did not beat the single-layer CA baselines; stop simple same-timestep layer fusion for now
+- [x] implement same-layer multi-timestep fusion (`--adapter_type wan_cross_attn_multitime_resampler`, `--wan_timesteps`) and Slurm launcher `slurm/scrream_wan_t2v_multitime_pack_train.sbatch`
+- [x] run multi-timestep smoke job `86493` for `249+499+749/layer14`; it completed with selected feature shape `[1,9360,1536]`
+- [x] inspect formal multi-timestep job `86494` for `249+499+749/layer14`: final result `F@0.10=0.45213117002164466`, `pred_to_gt_p90=0.49119475732247037`, `Chamfer=0.12659800921877226`; same-layer multi-timestep fusion is not promising
+- [x] implement F: FLF2V first/last-frame hidden route with `pair_endpoint81`, `t249/layer14`, cache script `prepare_scrream_wan_flf2v_feature_cache.py`, and Slurm scripts `scrream_wan_flf2v_{download,precompute,train}.sbatch`
+- [x] download/preflight FLF2V checkpoint: initial job `86497` failed on transient HF incomplete-read, retry/resume job `86500` completed; local checkpoint is `checkpoints/wan2.1/Wan2.1-FLF2V-14B-720P-diffusers` (~84G)
+- [x] run local FLF2V static/window checks: py_compile, bash syntax, CA-resampler `[1,3120,5120] -> [1,768,128]` and `[1,7200,5120] -> [1,768,128]` dummy backward, plus all 329 `pair_endpoint81` windows
+- [x] inspect FLF2V feature smoke / cache shards; final cache has `329/329` files under `scrream_wan_flf2v14b_pair_endpoint81_480/t249/layer14` with shape `[3120,5120]`
+- [x] run full FLF2V feature precompute for 329 samples at `t249/layer14` via shard jobs `86515` / `86516` / `86517` / `86518`
+- [x] run FLF2V smoke/formal training jobs `86519` / `86520`; formal result `F@0.10=0.42897984457682026`, `pred_to_gt_p90=0.5051772321263949`, `Chamfer=0.14052311765650907`, below T2V CA baselines
+- [x] submit tensor-choice audit B Slurm chain: `86534` full `model_output_latent` cache, `86535` one-step smoke, `86536` formal 50-epoch train
+- [x] inspect `model_output_latent` cache job `86534`: `329/329` files under `t499/model_output_latent/`, shape `[12480,16]`, metadata `model_output_formula=transformer_output_sample`
+- [x] inspect `model_output_latent` smoke job `86535`: loss, robust val metrics, checkpoints, and `val_visual_40960` were written
+- [x] inspect `model_output_latent` formal job `86536`; result `F@0.10=0.4199299775478907`, `pred_to_gt_p90=0.6285491685072581`, `Chamfer=0.44791099180777866`, negative versus old hidden MLP and hidden CA baselines
+- [x] implement latent learned readout (`WanLatentCrossAttentionResamplerAdapter` / `--adapter_type wan_latent_cross_attn_resampler`) for `pred_x0_latent` and `model_output_latent`
+- [x] run local shape/backward smoke for latent CA readout: `[1,12480,16] -> [1,768,128]`, wrong hidden shape raises a clear error
+- [x] run Slurm smoke `86539` for `model_output_latent + wan_latent_cross_attn_resampler`; it completed `0:0` and wrote loss / robust val / previews
+- [x] inspect formal job `86540` for `model_output_latent + wan_latent_cross_attn_resampler`; result `F@0.10=0.4289946537162989`, `pred_to_gt_p90=0.5942087918519974`, `Chamfer=0.19963246708114943`, still negative versus hidden CA
+- [x] inspect replacement Slurm smoke `86542` for `pred_x0_latent + wan_latent_cross_attn_resampler`; it completed `0:0` with loss, robust val, and previews
+- [x] submit formal `pred_x0_latent + wan_latent_cross_attn_resampler` as job `86543` with `48G` memory
+- [x] inspect formal job `86543` for `pred_x0_latent + wan_latent_cross_attn_resampler`; result `F@0.10=0.43766060222664477`, `pred_to_gt_p90=0.5175856028993925`, `Chamfer=0.20880577837427458`, best latent learned-readout result but still below hidden CA
+- [x] stop latent tensor-choice branch for now: `86536`, `86540`, and `86543` are all negative versus hidden CA baselines
+- [x] add `--adapter_gated` / `WAN_ADAPTER_GATED` and `WAN_SEED` support for WAN CA stability experiments
+- [x] run static checks and local dummy hidden CA gated/ungated forward-backward after adding gated support
+- [x] submit hidden CA seed/gated stability jobs `86547`-`86550` for `t249/layer14` and `t499/layer14`
+- [x] submit hidden CA L4 capacity jobs `86553`-`86554` for `t249/layer14` and `t499/layer14`
+- [x] inspect hidden CA seed23 repeat job `86547` (`t249/layer14`): F@0.10 `0.48706357506233194`, p90 `0.4482837840914726`, Chamfer `0.11202508273224036`
+- [x] inspect hidden CA seed23 repeat job `86548` (`t499/layer14`): F@0.10 `0.4591392560862819`, p90 `0.4479780395825704`, Chamfer `0.14107579924166203`
+- [x] inspect gated hidden CA job `86549` (`t249/layer14`): F@0.10 `0.4505522726705196`, p90 `0.46173084527254105`, Chamfer `0.11595033543805282`
+- [x] inspect gated hidden CA job `86550` (`t499/layer14`): F@0.10 `0.4866296484297818`, p90 `0.45513606319824856`, Chamfer `0.12565729891260466`
+- [x] inspect hidden CA L4 capacity job `86553` (`t249/layer14`): F@0.10 `0.4919946248489035`, p90 `0.4724609777331352`, Chamfer `0.11948200377325217`
+- [x] inspect hidden CA L4 capacity job `86554` (`t499/layer14`): F@0.10 `0.46280321302050603`, p90 `0.44610939423243207`, Chamfer `0.13269949393967786`
+- [x] record conclusion from `86547`-`86554`: hidden CA remains best WAN branch; L4 `t249/layer14` is a small repeated-F improvement, but gated CA and `t499` repeats should not be expanded
+- [x] create final WAN summary at `docs/probe/wan_summary_2026-05-19.md`
+- [x] pause WAN as the active model-coverage branch after the 2026-05-19 audit
+- [ ] optional WAN appendix only: inspect full-grid `t249/layer09`, full-grid `t249/layer14`, and L4 `t249/layer14` `val_visual_40960` outputs side by side
+- [ ] optional WAN appendix only: run L4 hidden-CA follow-up `t249/layer09 + adapter_layers=4`
+- [ ] optional WAN appendix only: repeat L4 `t249/layer14` with a second seed before calling the L4 gain stable
 - [ ] defer low-priority MLP-only capacity variants (`MLP-L6-H1024`, `MLP-L4-H2048`); note the current MLP already uses `GELU`, so this is probably not the root cause
+
+### Next backbone probe
+- [ ] choose next frozen backbone to probe after WAN
+- [ ] define the next-backbone feature cache schema, preserving native grid / temporal metadata
+- [ ] run cache shape / metadata sanity on 2 SCRREAM samples
+- [ ] add zero or sample-shuffle control before full training
+- [ ] run one-step adapter training smoke with robust val previews
+- [ ] start with a small layer/readout pilot before any broad ablation
 
 ## Deferred after SCRREAM baseline
 

@@ -1,6 +1,6 @@
 # NOVA3R 3D Probe
 
-## Current status override — 2026-05-16
+## Current status override — 2026-05-19
 
 The active probe state has moved to the corrected full SCRREAM branch. Important current constraints:
 
@@ -14,7 +14,7 @@ The active probe state has moved to the corrected full SCRREAM branch. Important
 - submit long data-prep and training work through `slurm/`; Slurm logs go to `slurm_out/`.
 - job `86140` completed the pre-meta-filter 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; treat it as historical after the sequence-meta GT correction.
 - job `86286` completed the VGGT layer ablation on clean sequence-meta-filtered GT under `*robustval_metafilter_seed17_vggt_layerXX`; VGGT layer `16` is the current default, with layer `24` as the main comparison point.
-- WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 hidden-state runs. Best WAN is `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT, so treat the branch as exploratory and setting-sensitive. Route2.1 `no_noise` / `low_noise`, targeted `t499/layer09 + token_layernorm`, `pair_tiled81`, pred-x0 Conv2d readout, and simple hidden-grid readouts completed and did not beat old Route2 best. The next WAN branch should use a generator-preserving Perceiver / cross-attention resampler on the best hidden setting (`ctx81 normal t499/layer09`).
+- WAN is paused as a main branch after the 2026-05-19 audit; see `docs/probe/wan_summary_2026-05-19.md`. WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 hidden-state runs. Old best WAN hidden baseline was `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT. Route2.1 `no_noise` / `low_noise`, targeted `t499/layer09 + token_layernorm`, `pair_tiled81`, latent tensor-choice probes, simple hidden-grid readouts, multi-layer fusion, multi-timestep fusion, FLF2V hidden, and gated CA completed and did not beat the best single-layer T2V CA baselines. The learned hidden CA resampler is the best WAN readout family: historical best `t499/layer14` reached `F@0.10=0.5012956284974035`; repeated settings are around `0.49`. WAN remains below clean-GT VGGT and should not be expanded broadly before the next backbone probe.
 - initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`.
 
 
@@ -63,19 +63,21 @@ Route2 hidden-state defaults:
 - cache shape per sample: `[3120,1536]`
 - network proxy for repo/checkpoint fetches: `http://127.0.0.1:17890`
 
-The cache generator also supports `--feature_kind pred_x0_latent`. That mode keeps the same 81-frame WAN forward pass but caches the scheduler clean-latent estimate `x0 = sample - sigma * model_output` instead of a block hidden state. It writes `t499/pred_x0_latent/<sample>.pt`, records `sigma`, scheduler metadata, and latent/model-output shapes, and produces expected pair features of shape `[12480,16]`.
+The cache generator also supports latent feature kinds. `--feature_kind pred_x0_latent` keeps the same 81-frame WAN forward pass but caches the scheduler clean-latent estimate `x0 = sample - sigma * model_output` instead of a block hidden state. `--feature_kind model_output_latent` caches the raw WAN transformer `output.sample` tensor. Both write one cache per timestep under `t499/<feature_kind>/<sample>.pt`, record scheduler/latent metadata, and produce pair features of shape `[12480,16]`.
 
-The original pred-x0 MLP-L4 readout failed during training because pooling `[12480,128] -> [768,128]` triggered a PyTorch CUDA adaptive-pooling backward assert. Use `train_wan_t2v_nova_adapter.py --wan_feature_kind pred_x0_latent --adapter_type conv2d_mlp` for the current pred-x0 probe. This readout restores `[B,2,60,104,16]`, applies a small stride-2 Conv2d stem to produce `[B,3120,128]`, and then pools to NOVA scene tokens `[B,768,128]`.
+The original pred-x0 MLP-L4 readout failed during training because pooling `[12480,128] -> [768,128]` triggered a PyTorch CUDA adaptive-pooling backward assert. Two latent readouts are now supported: `--adapter_type conv2d_mlp` restores `[B,2,60,104,16]`, applies a small stride-2 Conv2d stem to `[B,3120,128]`, and pools to NOVA scene tokens; `--adapter_type wan_latent_cross_attn_resampler` restores the same latent grid, adds temporal/row/column position embeddings, and cross-attends `768` NOVA query tokens to the full latent grid. The learned latent CA path is the fairer comparison against the successful hidden CA readout.
 
 On this Slurm cluster the `17890` proxy is bound to login-node loopback. WAN Slurm jobs therefore open an SSH local tunnel from the compute node back to `air-server:127.0.0.1:17890`, then export `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` to the compute node's local forwarded port. Override with `WAN_PROXY_SSH_HOST`, `WAN_PROXY_REMOTE_PORT`, `WAN_PROXY_LOCAL_PORT`, or set `WAN_DISABLE_PROXY=1`.
 
 WAN-specific Python dependencies are isolated in `experiments/probe3d/requirements-wan-t2v.txt`. They are not merged into the root environment files. Job `slurm/scrream_wan_t2v_download.sbatch` installs/validates them by default before downloading the checkpoint.
 
-Status on `2026-05-12 16:32 CST`: the WAN checkpoint is present under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB). Full feature precompute completed as jobs `86292`, `86293`, and `86294`; cache root `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81` contains `4937` `.pt` files / about `45G`. The first full training pack `86306` failed immediately on a final-loss scalar bug, `train_wan_t2v_nova_adapter.py` was patched, and replacement pack job `86307` completed all 15 runs on `air-node-04`, exit `0:0`, elapsed `13:36:04`.
+Status on `2026-05-19 14:14 CST`: the WAN checkpoint is present under `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` (~27 GB). Full feature precompute completed as jobs `86292`, `86293`, and `86294`; cache root `experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81` contains `4937` `.pt` files / about `45G`. The first full training pack `86306` failed immediately on a final-loss scalar bug, `train_wan_t2v_nova_adapter.py` was patched, and replacement pack job `86307` completed all 15 runs on `air-node-04`, exit `0:0`, elapsed `13:36:04`. Learned hidden CA-resampler jobs `86429`, `86453`, `86468`, `86485`, `86487`, `86494`, `86547`, `86548`, `86549`, `86550`, `86553`, and `86554` completed. Latent tensor-choice jobs `86536`, `86540`, and `86543` completed negative. The final WAN conclusion is frozen in `docs/probe/wan_summary_2026-05-19.md`.
 
 Route2 result:
 
-- best WAN: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+- old best WAN hidden baseline: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
+- historical best WAN interface: `t499/layer14 + wan_cross_attn_resampler`, `best_val_fscore_tau_0.10=0.5012956284974035`, `best_val_pred_to_gt_p90=0.4229188362757365`, `best_val_chamfer_l2=0.10908368105689685`; user visual inspection confirmed improvement
+- repeated CA-resampler signal: low-LR `t499/layer14` rerun `86453` was negative (`F@0.10=0.4292316005720653`); full-grid `86468` best F@0.10 is `t249/layer14=0.48913902331806663`, while best p90 / Chamfer is `t249/layer09=0.410525918006897 / 0.11981592203179996`
 - clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
 - Route2.1 result: `no_noise` / `low_noise` WAN cache modes for layers `9,14,29` completed, but the best clean/low-noise run (`no_noise/layer29`, `F@0.10=0.44840173`) did not beat old Route2 `t499/layer09`
 - targeted norm check: `t499/layer09 + token_layernorm` completed as job `86395`; it did not beat old Route2 best (`F@0.10=0.45476213575933216`, `pred_to_gt_p90=0.484821617603302`, `Chamfer=0.1771892917652925`)
@@ -84,7 +86,12 @@ Route2 result:
 - pred-x0 conv smoke job `86421` completed successfully on `air-node-02`, exit `0:0`, and wrote robust validation metrics
 - pred-x0 conv formal job `86422` completed on `air-node-02`, exit `0:0`, elapsed `00:52:13`; result: `F@0.10=0.41336424426176693`, `pred_to_gt_p90=0.6272750149170557`, `Chamfer-L2=0.35522504647572833`
 - structured hidden readout jobs completed on `air-node-04`: `grid2d_pool` formal job `86424` yielded `F@0.10=0.43326753863230877`, `pred_to_gt_p90=0.5651116619507471`, `Chamfer-L2=0.1759416777640581`; `grid2d_conv` formal job `86426` yielded `F@0.10=0.39855373112050535`, `pred_to_gt_p90=0.7689011543989182`, `Chamfer-L2=1.159957120815913`
-- current interpretation: pred-x0 latent, fixed 2D hidden pooling, and tiny fixed 2D conv readout do not close the WAN gap; the next useful interface audit is a learned Perceiver / cross-attention resampler from WAN hidden tokens to NOVA condition tokens
+- learned hidden readout jobs completed on `air-node-02`: `wan_cross_attn_resampler` layer09 smoke/formal jobs `86427` / `86428` nearly matched old WAN hidden F@0.10 while improving p90/Chamfer; layer sweep job `86429` found a historical high point at layer14; full-grid job `86468` shifted the most repeatable settings toward `t249/layer09/14`
+- multi-source learned readouts are implemented: `wan_cross_attn_multilayer_resampler` concatenates multiple layers at one timestep via `--wan_layers`, and `wan_cross_attn_multitime_resampler` concatenates multiple timesteps at one layer via `--wan_timesteps`
+- multi-layer and multi-timestep fusion did not close the gap: `t249 layers9-14` reached `F@0.10=0.46487238144059545`, `t249 layers9-14-19` reached `0.4724058254433277`, and `249+499+749/layer14` reached `0.45213117002164466`; all are below single-layer `t249/layer14` and the historical CA peak
+- latent tensor-choice readouts: `model_output_latent + conv2d_mlp` job `86536` reached F@0.10 `0.4199299775478907`; `model_output_latent + wan_latent_cross_attn_resampler` job `86540` reached `0.4289946537162989`; `pred_x0_latent + wan_latent_cross_attn_resampler` job `86543` reached `0.43766060222664477`. Learned latent CA helps over Conv2d but remains below hidden CA, so stop this tensor-choice branch for now.
+- hidden CA stability/capacity results: seed23 standard CA reached `0.48706357506233194` at `t249/layer14` and `0.4591392560862819` at `t499/layer14`; gated CA reached `0.4505522726705196` at `t249/layer14` and `0.4866296484297818` at `t499/layer14`; L4 CA reached `0.4919946248489035` at `t249/layer14` and `0.46280321302050603` at `t499/layer14`.
+- current interpretation: fixed pred-x0 Conv2d readout, fixed model-output Conv2d readout, learned latent CA readout, fixed 2D hidden pooling, tiny fixed 2D conv readout, simple hidden fusion, gated CA, and FLF2V hidden do not close the WAN gap; a learned WAN-hidden-to-NOVA token interface is the only clearly positive branch. WAN is paused as the main line. Optional appendix checks are L4 `t249/layer09` or a seed repeat of L4 `t249/layer14`; the active direction is the next backbone probe.
 
 Download/preflight WAN dependencies and checkpoint:
 
@@ -117,6 +124,18 @@ Full 15-run adapter ablation:
 sbatch slurm/scrream_wan_t2v_ablation_pack_train.sbatch
 ```
 
+Multi-source learned resampler audits:
+
+```bash
+WAN_TIMESTEPS=249 \
+WAN_LAYER_GROUPS=9+14,9+14+19 \
+sbatch slurm/scrream_wan_t2v_multilayer_pack_train.sbatch
+
+WAN_TIMESTEP_GROUPS=249+499+749 \
+WAN_LAYERS=14 \
+sbatch slurm/scrream_wan_t2v_multitime_pack_train.sbatch
+```
+
 Predicted-x0 latent smoke and formal chain:
 
 ```bash
@@ -131,6 +150,60 @@ WAN_ADAPTER_TYPE=conv2d_mlp \
 WAN_TIMESTEPS=499 \
 WAN_LAYERS=0 \
 sbatch slurm/scrream_wan_t2v_ablation_pack_train.sbatch
+```
+
+Model-output latent audit:
+
+```bash
+WAN_FEATURE_KIND=model_output_latent \
+WAN_TIMESTEPS=499 \
+WAN_LAYERS=0 \
+sbatch slurm/scrream_wan_t2v_precompute.sbatch
+
+WAN_FEATURE_KIND=model_output_latent \
+WAN_ADAPTER_TYPE=conv2d_mlp \
+WAN_TIMESTEPS=499 \
+WAN_LAYERS=0 \
+sbatch slurm/scrream_wan_t2v_ablation_pack_train.sbatch
+```
+
+## SCRREAM WAN-FLF2V pair-endpoint probe
+
+FLF2V is intentionally separate from the T2V `ctx81` route. It uses first/last-frame conditioning and a `pair_endpoint81` window:
+
+- slot `0`: first SCRREAM pair frame `f0`
+- slot `80`: second SCRREAM pair frame `f1`
+- slots `1..79`: linearly sampled SCRREAM sequence frame IDs between `f0` and `f1`
+- extracted hidden temporal indices: `[0,20]`
+
+First probe setting:
+
+- model: `Wan-AI/Wan2.1-FLF2V-14B-720P-diffusers`
+- local checkpoint: `checkpoints/wan2.1/Wan2.1-FLF2V-14B-720P-diffusers`
+- cache root: `experiments/probe3d/feature_cache/scrream_wan_flf2v14b_pair_endpoint81_480`
+- feature script: `experiments/probe3d/scripts/prepare_scrream_wan_flf2v_feature_cache.py`
+- training script: reuse cache-backed `experiments/probe3d/train_wan_t2v_nova_adapter.py`
+- Slurm: `slurm/scrream_wan_flf2v_download.sbatch`, `slurm/scrream_wan_flf2v_precompute.sbatch`, `slurm/scrream_wan_flf2v_train.sbatch`
+- first formal run: `t249/layer14`, empty prompt, `--adapter_type wan_cross_attn_resampler`, 50 epochs
+
+The 480P expected pair cache shape is `[3120,5120]`. If a future run must fall back to 720P, expected pair cache shape is `[7200,5120]`. The CA-resampler now reads hidden-grid shape from cache metadata and supports `input_dim=5120`.
+
+Status on `2026-05-19`: checkpoint download/preflight completed as job `86500` after an initial transient incomplete-read failure in job `86497`; the local checkpoint is about `84G`. Static checks, `bash -n`, dummy `5120` adapter forward/backward, and 329-sample window-only smoke passed. Cache shard jobs `86515` / `86516` / `86517` / `86518` completed `329/329` samples at `[3120,5120]`; smoke/formal training jobs `86519` / `86520` completed. Formal FLF2V result is `F@0.10=0.42897984457682026`, `pred_to_gt_p90=0.5051772321263949`, and `Chamfer=0.14052311765650907`, below T2V CA baselines.
+
+FLF2V smoke commands:
+
+```bash
+sbatch slurm/scrream_wan_flf2v_download.sbatch
+
+WAN_WINDOW_ONLY=1 \
+sbatch slurm/scrream_wan_flf2v_precompute.sbatch
+
+WAN_MAX_SAMPLES=2 \
+WAN_FLF2V_TIMESTEPS=249 \
+WAN_FLF2V_LAYERS=14 \
+WAN_CPU_OFFLOAD=1 \
+sbatch --gres=gpu:a100:1 --mem=128G \
+  slurm/scrream_wan_flf2v_precompute.sbatch
 ```
 
 Run these commands from the `nova3r` conda environment.

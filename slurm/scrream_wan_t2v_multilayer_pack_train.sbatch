@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=scrream_wan_t2v_pack
+#SBATCH --job-name=scrream_wan_t2v_multilayer
 #SBATCH --output=slurm_out/%x_%j.out
 #SBATCH --error=slurm_out/%x_%j.err
-#SBATCH --time=48:00:00
-#SBATCH --gres=gpu:a100:4
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=128G
+#SBATCH --time=24:00:00
+#SBATCH --gres=gpu:a100:2
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=96G
 
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-/home/JJ_Group/lih2511/3dprobe}"
-mkdir -p slurm_out experiments/probe3d/result experiments/probe3d/feature_cache
+mkdir -p slurm_out experiments/probe3d/result
 
 source /usr/local/miniconda3/etc/profile.d/conda.sh
 conda activate nova3r
@@ -44,19 +44,20 @@ else
   export all_proxy="$ALL_PROXY"
 fi
 
+TIMESTEPS_CSV="${WAN_TIMESTEPS:-249}"
+LAYER_GROUPS_CSV="${WAN_LAYER_GROUPS:-9+14,9+14+19}"
+ADAPTER_TYPE="${WAN_ADAPTER_TYPE:-wan_cross_attn_multilayer_resampler}"
 FEATURE_KIND="${WAN_FEATURE_KIND:-hidden}"
-ADAPTER_TYPE="${WAN_ADAPTER_TYPE:-mlp}"
-TIMESTEPS_CSV="${WAN_TIMESTEPS:-249,499,749}"
-if [[ "$FEATURE_KIND" == "hidden" ]]; then
-  LAYERS_CSV="${WAN_LAYERS:-9,14,19,24,29}"
-else
-  if [[ -n "${WAN_LAYERS:-}" && "${WAN_LAYERS}" != "0" ]]; then
-    echo "Ignoring WAN_LAYERS=$WAN_LAYERS for feature_kind=$FEATURE_KIND; non-hidden WAN features have no block layer."
-  fi
-  LAYERS_CSV="0"
+if [[ "$FEATURE_KIND" != "hidden" ]]; then
+  echo "Multi-layer WAN fusion only supports WAN_FEATURE_KIND=hidden, got $FEATURE_KIND" >&2
+  exit 2
+fi
+if [[ "$ADAPTER_TYPE" != "wan_cross_attn_multilayer_resampler" ]]; then
+  echo "Multi-layer WAN fusion requires WAN_ADAPTER_TYPE=wan_cross_attn_multilayer_resampler, got $ADAPTER_TYPE" >&2
+  exit 2
 fi
 IFS=',' read -r -a TIMESTEPS <<< "$TIMESTEPS_CSV"
-IFS=',' read -r -a LAYERS <<< "$LAYERS_CSV"
+IFS=',' read -r -a LAYER_GROUPS <<< "$LAYER_GROUPS_CSV"
 
 VISIBLE_RAW="${CUDA_VISIBLE_DEVICES:-}"
 if [[ -n "$VISIBLE_RAW" ]]; then
@@ -70,42 +71,14 @@ else
 fi
 MAX_PARALLEL="${WAN_PACK_PARALLEL:-${#GPU_IDS[@]}}"
 if [[ "$MAX_PARALLEL" -lt 1 ]]; then
-  echo "No GPUs visible for WAN packed ablation." >&2
+  echo "No GPUs visible for WAN multi-layer pack." >&2
   exit 2
 fi
 
 ADAPTER_DATA="${WAN_ADAPTER_DATA:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt}"
 NOVA_CKPT="${WAN_NOVA_CKPT:-checkpoints/scene_ae/checkpoint-last.pth}"
-if [[ "$FEATURE_KIND" == "pred_x0_latent" ]]; then
-  CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81_pred_x0_latent}"
-  if [[ "$ADAPTER_TYPE" == "conv2d_mlp" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_pred_x0_latent_conv2d_}"
-  elif [[ "$ADAPTER_TYPE" == "wan_latent_cross_attn_resampler" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_pred_x0_latent_ca_resampler_}"
-  else
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_pred_x0_latent_}"
-  fi
-elif [[ "$FEATURE_KIND" == "model_output_latent" ]]; then
-  CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81_model_output_latent}"
-  if [[ "$ADAPTER_TYPE" == "conv2d_mlp" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_model_output_latent_conv2d_}"
-  elif [[ "$ADAPTER_TYPE" == "wan_latent_cross_attn_resampler" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_model_output_latent_ca_resampler_}"
-  else
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_model_output_latent_}"
-  fi
-else
-  CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81}"
-  if [[ "$ADAPTER_TYPE" == "grid2d_pool" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_grid2d_}"
-  elif [[ "$ADAPTER_TYPE" == "grid2d_conv" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_grid2d_conv_}"
-  elif [[ "$ADAPTER_TYPE" == "wan_cross_attn_resampler" ]]; then
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_ca_resampler_}"
-  else
-    RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_seed17_wan_t2v1p3b_ctx81_}"
-  fi
-fi
+CACHE_DIR="${WAN_CACHE_DIR:-experiments/probe3d/feature_cache/scrream_wan_t2v1p3b_ctx81}"
+RUN_PREFIX="${WAN_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_wan_t2v1p3b_ctx81_ca_resampler_multilayer_}"
 NUM_QUERIES="${WAN_NUM_QUERIES:-20000}"
 EPOCHS="${WAN_EPOCHS:-50}"
 BATCH_SIZE="${WAN_BATCH_SIZE:-1}"
@@ -131,38 +104,23 @@ if [[ ! -d "$CACHE_DIR" ]]; then
   exit 2
 fi
 
-echo "Packed SCRREAM WAN T2V route2 ablation"
+echo "Packed SCRREAM WAN T2V multi-layer fusion"
 echo "  timesteps=$TIMESTEPS_CSV"
-echo "  layers=$LAYERS_CSV"
+echo "  layer_groups=$LAYER_GROUPS_CSV"
 echo "  visible_gpus=${GPU_IDS[*]}"
 echo "  max_parallel=$MAX_PARALLEL"
 echo "  adapter_data=$ADAPTER_DATA"
 echo "  cache_dir=$CACHE_DIR"
-echo "  feature_kind=$FEATURE_KIND"
 echo "  adapter_type=$ADAPTER_TYPE"
-echo "  adapter_layers=${WAN_ADAPTER_LAYERS:-4}"
-echo "  adapter_hidden_dim=${WAN_ADAPTER_HIDDEN_DIM:-1024}"
+echo "  adapter_layers=${WAN_ADAPTER_LAYERS:-2}"
+echo "  adapter_hidden_dim=${WAN_ADAPTER_HIDDEN_DIM:-512}"
 echo "  adapter_heads=${WAN_ADAPTER_HEADS:-8}"
 echo "  adapter_mlp_ratio=${WAN_ADAPTER_MLP_RATIO:-2.0}"
-echo "  adapter_gated=${WAN_ADAPTER_GATED:-0}"
-echo "  seed=${WAN_SEED:-17}"
 echo "  max_steps=$MAX_STEPS"
-echo "  num_queries=$NUM_QUERIES"
 echo "  feature_norm=${WAN_FEATURE_NORM:-none}"
-echo "  eval_batches=${WAN_EVAL_BATCHES:-0}"
-echo "  val_metric_max_points=${WAN_VAL_METRIC_MAX_POINTS:-20000}"
 echo "  val_preview_samples=${WAN_VAL_PREVIEW_SAMPLES:-12}"
 echo "  val_preview_queries=${WAN_VAL_PREVIEW_QUERIES:-40960}"
-echo "  proxy=${HTTP_PROXY:-<disabled>}"
-echo "  proxy_tunnel_pid=${WAN_PROXY_TUNNEL_PID:-<none>}"
 nvidia-smi || true
-
-ADAPTER_GATED_ARGS=()
-case "${WAN_ADAPTER_GATED:-0}" in
-  1|true|TRUE|yes|YES|on|ON)
-    ADAPTER_GATED_ARGS=(--adapter_gated)
-    ;;
-esac
 
 declare -a PIDS=()
 
@@ -186,43 +144,43 @@ wait_for_slot() {
 
 job_idx=0
 for timestep in "${TIMESTEPS[@]}"; do
-  for layer in "${LAYERS[@]}"; do
+  for group in "${LAYER_GROUPS[@]}"; do
     wait_for_slot
-    layer_padded="$(printf '%02d' "$layer")"
-    if [[ "$FEATURE_KIND" == "hidden" ]]; then
-      run_name="${RUN_PREFIX}t${timestep}_layer${layer_padded}"
-    else
-      run_name="${RUN_PREFIX}t${timestep}"
-    fi
+    layers_csv="${group//+/,}"
+    IFS=',' read -r -a GROUP_LAYERS <<< "$layers_csv"
+    layers_slug=""
+    for group_layer in "${GROUP_LAYERS[@]}"; do
+      group_layer="$(printf '%d' "$group_layer")"
+      if [[ -z "$layers_slug" ]]; then
+        layers_slug="$group_layer"
+      else
+        layers_slug="${layers_slug}-${group_layer}"
+      fi
+    done
+    run_name="${RUN_PREFIX}t${timestep}_layers${layers_slug}"
     gpu="${GPU_IDS[$((job_idx % ${#GPU_IDS[@]}))]}"
     output_dir="${WAN_OUTPUT_BASE:-experiments/probe3d/result}/${run_name}"
+    log_file="slurm_out/scrream_wan_t2v_multilayer_t${timestep}_layers${layers_slug}_${SLURM_JOB_ID:-manual}.log"
     mkdir -p "$output_dir"
-    if [[ "$FEATURE_KIND" == "hidden" ]]; then
-      log_file="slurm_out/scrream_wan_t2v_t${timestep}_layer${layer_padded}_${SLURM_JOB_ID:-manual}.log"
-      echo "Launching t=$timestep layer=$layer on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
-    else
-      log_file="slurm_out/scrream_wan_t2v_${FEATURE_KIND}_t${timestep}_${SLURM_JOB_ID:-manual}.log"
-      echo "Launching t=$timestep feature_kind=$FEATURE_KIND on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
-    fi
+    echo "Launching t=$timestep layers=$layers_csv on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
     (
       export CUDA_VISIBLE_DEVICES="$gpu"
       python -u experiments/probe3d/train_wan_t2v_nova_adapter.py \
-        --seed "${WAN_SEED:-17}" \
         --dataset scrream_adapter \
         --data_root "$ADAPTER_DATA" \
         --nova_ckpt "$NOVA_CKPT" \
         --wan_feature_cache_dir "$CACHE_DIR" \
         --wan_timestep "$timestep" \
-        --wan_layer "$layer" \
+        --wan_layer "$(printf '%s' "$layers_csv" | cut -d',' -f1)" \
+        --wan_layers "$layers_csv" \
         --wan_feature_kind "$FEATURE_KIND" \
         --wan_feature_norm "${WAN_FEATURE_NORM:-none}" \
         --wan_feature_norm_eps "${WAN_FEATURE_NORM_EPS:-1e-6}" \
         --adapter_type "$ADAPTER_TYPE" \
-        --adapter_layers "${WAN_ADAPTER_LAYERS:-4}" \
-        --adapter_hidden_dim "${WAN_ADAPTER_HIDDEN_DIM:-1024}" \
+        --adapter_layers "${WAN_ADAPTER_LAYERS:-2}" \
+        --adapter_hidden_dim "${WAN_ADAPTER_HIDDEN_DIM:-512}" \
         --adapter_heads "${WAN_ADAPTER_HEADS:-8}" \
         --adapter_mlp_ratio "${WAN_ADAPTER_MLP_RATIO:-2.0}" \
-        "${ADAPTER_GATED_ARGS[@]}" \
         --loss_type "${WAN_LOSS_TYPE:-nova_flow}" \
         --num_queries "$NUM_QUERIES" \
         --num_views 2 \

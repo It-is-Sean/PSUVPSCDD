@@ -47,7 +47,7 @@ For the SCRREAM WAN Route2 probe, use the isolated dependency file in the existi
 pip install -r experiments/probe3d/requirements-wan-t2v.txt
 ```
 
-The WAN Route2 training path does not import Wan2.1 during every adapter step. WAN is loaded during feature precompute and `experiments/probe3d/train_wan_t2v_nova_adapter.py` trains from cache files. Hidden-state caches use `[3120,1536]` tensors under `tXXX/layerYY/`; pred-x0 audit caches use `--feature_kind pred_x0_latent`, write `t499/pred_x0_latent/`, and have complete `[12480,16]` tensors from job `86411`. Train pred-x0 with `--adapter_type conv2d_mlp`, because the original MLP readout hit a CUDA adaptive-pooling backward assert. Fixed hidden-grid readouts are available as `--adapter_type grid2d_pool` and `--adapter_type grid2d_conv`; both completed as negative audits, so the next WAN readout branch should be a learned Perceiver / cross-attention resampler.
+The WAN Route2 training path does not import Wan2.1 during every adapter step. WAN is loaded during feature precompute and `experiments/probe3d/train_wan_t2v_nova_adapter.py` trains from cache files. Hidden-state caches use `[3120,1536]` tensors under `tXXX/layerYY/`; latent tensor-choice caches use `[12480,16]` tensors under `tXXX/<feature_kind>/`. The full WAN audit is paused and summarized in `docs/probe/wan_summary_2026-05-19.md`. The main technical lesson is that `wan_cross_attn_resampler` is the only clearly positive WAN readout; the historical peak is `t499/layer14` F@0.10 `0.5012956284974035`, repeated settings are closer to `0.49`, and WAN remains far below clean-GT VGGT layer `16`. Optional future WAN work should be appendix-only.
 
 ### VidFM3D
 - `third_party/VidFM3D/`
@@ -83,4 +83,4 @@ These are not vendored into git and should stay local/runtime-provided:
 - If you want the **latest concrete adapter experiments**, go straight to `experiments/probe3d/`.
 - If you need third-party model code, look in `third_party/` before reaching outside the repo.
 - If you need the current SCRREAM run state, read `docs/probe/handoff_2026-05-07.md`.
-- If you need WAN Route2 / Route2.1 / pred-x0 / hidden-grid execution state, read the `2026-05-16 22:26`, `2026-05-16 14:05`, `2026-05-15 23:10`, `2026-05-15 12:30`, `2026-05-12`, `2026-05-11`, and `2026-05-10` update sections in `docs/probe/handoff_2026-05-07.md`.
+- If you need WAN Route2 / Route2.1 / pred-x0 / hidden-grid / CA-resampler / multi-source fusion execution state, start with `docs/probe/wan_summary_2026-05-19.md`; use the dated update sections in `docs/probe/handoff_2026-05-07.md` only for the detailed evidence trail.

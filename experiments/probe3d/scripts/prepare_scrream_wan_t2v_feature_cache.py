@@ -114,6 +114,7 @@ WAN_TOKENS = (21, 30, 52)
 WAN_LATENT_CHANNELS = 16
 FEATURE_KIND_HIDDEN = "hidden"
 FEATURE_KIND_PRED_X0_LATENT = "pred_x0_latent"
+FEATURE_KIND_MODEL_OUTPUT_LATENT = "model_output_latent"
 PAIR_TILED81_PATTERN = "half_f0_41_f1_40"
 
 
@@ -145,9 +146,13 @@ def safe_sample_id(sample_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", sample_id).strip("_")
 
 
+def is_latent_feature_kind(feature_kind: str) -> bool:
+    return feature_kind in {FEATURE_KIND_PRED_X0_LATENT, FEATURE_KIND_MODEL_OUTPUT_LATENT}
+
+
 def cache_path(cache_root: Path, timestep: int, layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> Path:
-    if feature_kind == FEATURE_KIND_PRED_X0_LATENT:
-        return cache_root / f"t{int(timestep):03d}" / FEATURE_KIND_PRED_X0_LATENT / f"{safe_sample_id(sample_id)}.pt"
+    if is_latent_feature_kind(feature_kind):
+        return cache_root / f"t{int(timestep):03d}" / feature_kind / f"{safe_sample_id(sample_id)}.pt"
     if feature_kind != FEATURE_KIND_HIDDEN:
         raise ValueError(f"Unsupported WAN feature_kind={feature_kind!r}")
     return cache_root / f"t{int(timestep):03d}" / f"layer{int(layer):02d}" / f"{safe_sample_id(sample_id)}.pt"
@@ -546,6 +551,11 @@ class WanT2VFeatureExtractor:
         if feature_kind == FEATURE_KIND_PRED_X0_LATENT:
             feature = reshape_wan_latents(pred_x0_latents).detach().cpu()
             return {-1: feature}, noise_info
+        if feature_kind == FEATURE_KIND_MODEL_OUTPUT_LATENT:
+            feature = reshape_wan_latents(output.sample).detach().cpu()
+            noise_info.setdefault("model_output_latent_shape", list(output.sample.shape))
+            noise_info.setdefault("model_output_formula", "transformer_output_sample")
+            return {-1: feature}, noise_info
         if feature_kind != FEATURE_KIND_HIDDEN:
             raise ValueError(f"Unsupported WAN feature_kind={feature_kind!r}")
         missing = set(layers) - set(hidden_states.keys())
@@ -574,10 +584,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--feature_kind",
         default=FEATURE_KIND_HIDDEN,
-        choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT),
+        choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT, FEATURE_KIND_MODEL_OUTPUT_LATENT),
         help=(
             "Feature tensor to cache. hidden preserves Route2 transformer block hidden states; "
-            "pred_x0_latent caches the scheduler clean-latent estimate x0 = sample - sigma * model_output."
+            "pred_x0_latent caches the scheduler clean-latent estimate x0 = sample - sigma * model_output; "
+            "model_output_latent caches the raw WAN transformer output.sample tensor."
         ),
     )
     parser.add_argument(
@@ -631,7 +642,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     timesteps = parse_csv_ints(args.timesteps)
     layers = parse_csv_ints(args.layers)
-    if args.feature_kind == FEATURE_KIND_PRED_X0_LATENT:
+    if is_latent_feature_kind(args.feature_kind):
         if layers != [-1]:
             logging.info("Ignoring --layers=%s for feature_kind=%s; one cache is written per timestep.", layers, args.feature_kind)
         layers = [-1]
@@ -750,7 +761,7 @@ def main() -> None:
                     "x0_formula": noise_info.get("x0_formula", ""),
                     "latent_noise_applied": bool(noise_info["latent_noise_applied"]),
                     "low_noise_index": int(args.low_noise_index),
-                    "layer": None if args.feature_kind == FEATURE_KIND_PRED_X0_LATENT else int(layer),
+                    "layer": None if is_latent_feature_kind(args.feature_kind) else int(layer),
                     "seed": feature_seed,
                     "source": source,
                     "full_feature_shape": list(full_feature.shape),
@@ -758,6 +769,8 @@ def main() -> None:
                     "transformer_latent_shape": noise_info.get("transformer_latent_shape"),
                     "model_output_shape": noise_info.get("model_output_shape"),
                     "pred_x0_latent_shape": noise_info.get("pred_x0_latent_shape"),
+                    "model_output_latent_shape": noise_info.get("model_output_latent_shape"),
+                    "model_output_formula": noise_info.get("model_output_formula"),
                     "feature_shape": list(pair_feature.shape),
                 }
                 write_cache(out_path, pair_feature, cache_meta)

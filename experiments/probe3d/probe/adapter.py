@@ -158,6 +158,96 @@ class WanPredX0LatentConvAdapter(nn.Module):
         return x.contiguous()
 
 
+class WanLatentCrossAttentionResamplerAdapter(nn.Module):
+    """
+    Learned resampler from WAN latent-grid features to NOVA scene tokens.
+
+    Pred-x0 and model-output latent caches store two temporal slices flattened
+    from [2, H, W, 16]. This adapter restores that explicit grid, adds
+    temporal/row/column position embeddings, and lets NOVA-sized query tokens
+    cross-attend to the full latent grid. It avoids the fixed Conv2d/pooling
+    bottleneck while keeping the NOVA/FM decoder and loss unchanged.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        output_tokens: int,
+        hidden_dim: int = 512,
+        adapter_layers: int = 2,
+        num_heads: int = 8,
+        mlp_ratio: float = 2.0,
+        temporal_tokens: int = 2,
+        latent_height: int = 60,
+        latent_width: int = 104,
+        gated: bool = False,
+    ) -> None:
+        super().__init__()
+        if adapter_layers < 1 or adapter_layers > 8:
+            raise ValueError(f"adapter_layers must be between 1 and 8, got {adapter_layers}")
+        if hidden_dim % num_heads != 0:
+            raise ValueError(f"hidden_dim must be divisible by num_heads, got {hidden_dim} and {num_heads}")
+        self.input_dim = int(input_dim)
+        self.output_dim = int(output_dim)
+        self.output_tokens = int(output_tokens)
+        self.hidden_dim = int(hidden_dim)
+        self.adapter_layers = int(adapter_layers)
+        self.num_heads = int(num_heads)
+        self.mlp_ratio = float(mlp_ratio)
+        self.gated = bool(gated)
+        self.temporal_tokens = int(temporal_tokens)
+        self.latent_height = int(latent_height)
+        self.latent_width = int(latent_width)
+        self.expected_tokens = self.temporal_tokens * self.latent_height * self.latent_width
+        if self.input_dim <= 0:
+            raise ValueError(f"WAN latent cross-attention adapter expects positive input_dim, got {self.input_dim}")
+
+        self.input_proj = nn.Linear(self.input_dim, self.hidden_dim)
+        self.temporal_pos = nn.Parameter(torch.randn(1, self.temporal_tokens, 1, 1, self.hidden_dim) * 0.02)
+        self.row_pos = nn.Parameter(torch.randn(1, 1, self.latent_height, 1, self.hidden_dim) * 0.02)
+        self.col_pos = nn.Parameter(torch.randn(1, 1, 1, self.latent_width, self.hidden_dim) * 0.02)
+        self.query_tokens = nn.Parameter(torch.randn(1, self.output_tokens, self.hidden_dim) * 0.02)
+        self.blocks = nn.ModuleList(
+            [
+                CrossAttentionBlock(
+                    self.hidden_dim,
+                    self.num_heads,
+                    self.mlp_ratio,
+                    gated=self.gated,
+                )
+                for _ in range(self.adapter_layers)
+            ]
+        )
+        self.output_norm = nn.LayerNorm(self.hidden_dim)
+        self.output_proj = nn.Linear(self.hidden_dim, self.output_dim)
+        self.grid_input_shape = (self.temporal_tokens, self.latent_height, self.latent_width, self.input_dim)
+        self.resampler_shape = (self.output_tokens, self.output_dim)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        tokens = _flatten_tokens(tokens)
+        if tokens.shape[1] != self.expected_tokens or tokens.shape[2] != self.input_dim:
+            raise ValueError(
+                "Expected WAN latent-grid tokens "
+                f"[B,{self.expected_tokens},{self.input_dim}], got {tuple(tokens.shape)}"
+            )
+
+        b = tokens.shape[0]
+        context = self.input_proj(tokens.float()).reshape(
+            b,
+            self.temporal_tokens,
+            self.latent_height,
+            self.latent_width,
+            self.hidden_dim,
+        )
+        context = context + self.temporal_pos + self.row_pos + self.col_pos
+        context = context.reshape(b, self.expected_tokens, self.hidden_dim)
+        queries = self.query_tokens.expand(b, -1, -1)
+        for block in self.blocks:
+            queries = block(queries, context)
+        return self.output_proj(self.output_norm(queries)).contiguous()
+
+
 class WanHiddenGrid2DPoolAdapter(nn.Module):
     """
     Structured 2D pooling readout for WAN hidden pair features.
@@ -283,7 +373,7 @@ class WanHiddenCrossAttentionResamplerAdapter(nn.Module):
     Learned resampler from WAN hidden pair features to NOVA scene tokens.
 
     The WAN hidden cache stores two temporal slices flattened from
-    [2, 30, 52, 1536]. This adapter keeps explicit temporal/row/column
+    [2, H, W, C]. This adapter keeps explicit temporal/row/column
     position embeddings, then lets NOVA-sized query tokens cross-attend to
     the full WAN token grid. It is intentionally still a probe adapter: the
     generator, loss, and target semantics stay unchanged.
@@ -315,12 +405,13 @@ class WanHiddenCrossAttentionResamplerAdapter(nn.Module):
         self.adapter_layers = int(adapter_layers)
         self.num_heads = int(num_heads)
         self.mlp_ratio = float(mlp_ratio)
+        self.gated = bool(gated)
         self.temporal_tokens = int(temporal_tokens)
         self.grid_height = int(grid_height)
         self.grid_width = int(grid_width)
         self.expected_tokens = self.temporal_tokens * self.grid_height * self.grid_width
-        if self.input_dim != 1536:
-            raise ValueError(f"WAN hidden cross-attention adapter expects input_dim=1536, got {self.input_dim}")
+        if self.input_dim <= 0:
+            raise ValueError(f"WAN hidden cross-attention adapter expects positive input_dim, got {self.input_dim}")
 
         self.input_proj = nn.Linear(self.input_dim, self.hidden_dim)
         self.temporal_pos = nn.Parameter(torch.randn(1, self.temporal_tokens, 1, 1, self.hidden_dim) * 0.02)
@@ -333,7 +424,7 @@ class WanHiddenCrossAttentionResamplerAdapter(nn.Module):
                     self.hidden_dim,
                     self.num_heads,
                     self.mlp_ratio,
-                    gated=bool(gated),
+                    gated=self.gated,
                 )
                 for _ in range(self.adapter_layers)
             ]
@@ -365,6 +456,116 @@ class WanHiddenCrossAttentionResamplerAdapter(nn.Module):
         for block in self.blocks:
             queries = block(queries, context)
         return self.output_proj(self.output_norm(queries)).contiguous()
+
+
+class WanHiddenMultiSourceCrossAttentionResamplerAdapter(nn.Module):
+    """
+    Learned resampler from multiple WAN hidden sources to NOVA scene tokens.
+
+    The expected input is a concatenation of same-shaped WAN hidden pair
+    features, for example multiple layers at one timestep or multiple timesteps
+    at one layer: [B, num_sources * 2 * H * W, C]. The adapter restores the
+    explicit [source, temporal, row, col] layout, adds position embeddings for
+    each axis, and lets NOVA-sized query tokens cross-attend to all WAN tokens.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        output_tokens: int,
+        num_sources: int,
+        hidden_dim: int = 512,
+        adapter_layers: int = 2,
+        num_heads: int = 8,
+        mlp_ratio: float = 2.0,
+        temporal_tokens: int = 2,
+        grid_height: int = 30,
+        grid_width: int = 52,
+        gated: bool = False,
+    ) -> None:
+        super().__init__()
+        if adapter_layers < 1 or adapter_layers > 8:
+            raise ValueError(f"adapter_layers must be between 1 and 8, got {adapter_layers}")
+        if hidden_dim % num_heads != 0:
+            raise ValueError(f"hidden_dim must be divisible by num_heads, got {hidden_dim} and {num_heads}")
+        self.input_dim = int(input_dim)
+        self.output_dim = int(output_dim)
+        self.output_tokens = int(output_tokens)
+        self.num_sources = int(num_sources)
+        self.hidden_dim = int(hidden_dim)
+        self.adapter_layers = int(adapter_layers)
+        self.num_heads = int(num_heads)
+        self.mlp_ratio = float(mlp_ratio)
+        self.gated = bool(gated)
+        self.temporal_tokens = int(temporal_tokens)
+        self.grid_height = int(grid_height)
+        self.grid_width = int(grid_width)
+        self.tokens_per_layer = self.temporal_tokens * self.grid_height * self.grid_width
+        self.expected_tokens = self.num_sources * self.tokens_per_layer
+        if self.num_sources < 2:
+            raise ValueError(f"multi-source WAN adapter expects num_sources >= 2, got {self.num_sources}")
+        if self.input_dim <= 0:
+            raise ValueError(f"WAN hidden multi-source adapter expects positive input_dim, got {self.input_dim}")
+
+        self.input_proj = nn.Linear(self.input_dim, self.hidden_dim)
+        self.source_pos = nn.Parameter(torch.randn(1, self.num_sources, 1, 1, 1, self.hidden_dim) * 0.02)
+        self.temporal_pos = nn.Parameter(torch.randn(1, 1, self.temporal_tokens, 1, 1, self.hidden_dim) * 0.02)
+        self.row_pos = nn.Parameter(torch.randn(1, 1, 1, self.grid_height, 1, self.hidden_dim) * 0.02)
+        self.col_pos = nn.Parameter(torch.randn(1, 1, 1, 1, self.grid_width, self.hidden_dim) * 0.02)
+        self.query_tokens = nn.Parameter(torch.randn(1, self.output_tokens, self.hidden_dim) * 0.02)
+        self.blocks = nn.ModuleList(
+            [
+                CrossAttentionBlock(
+                    self.hidden_dim,
+                    self.num_heads,
+                    self.mlp_ratio,
+                    gated=self.gated,
+                )
+                for _ in range(self.adapter_layers)
+            ]
+        )
+        self.output_norm = nn.LayerNorm(self.hidden_dim)
+        self.output_proj = nn.Linear(self.hidden_dim, self.output_dim)
+        self.grid_input_shape = (
+            self.num_sources,
+            self.temporal_tokens,
+            self.grid_height,
+            self.grid_width,
+            self.input_dim,
+        )
+        self.resampler_shape = (self.output_tokens, self.output_dim)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        tokens = _flatten_tokens(tokens)
+        if tokens.shape[1] != self.expected_tokens or tokens.shape[2] != self.input_dim:
+            raise ValueError(
+                "Expected multi-layer WAN hidden tokens "
+                f"[B,{self.expected_tokens},{self.input_dim}], got {tuple(tokens.shape)}"
+            )
+
+        b = tokens.shape[0]
+        context = self.input_proj(tokens.float()).reshape(
+            b,
+            self.num_sources,
+            self.temporal_tokens,
+            self.grid_height,
+            self.grid_width,
+            self.hidden_dim,
+        )
+        context = context + self.source_pos + self.temporal_pos + self.row_pos + self.col_pos
+        context = context.reshape(b, self.expected_tokens, self.hidden_dim)
+        queries = self.query_tokens.expand(b, -1, -1)
+        for block in self.blocks:
+            queries = block(queries, context)
+        return self.output_proj(self.output_norm(queries)).contiguous()
+
+
+class WanHiddenMultiLayerCrossAttentionResamplerAdapter(WanHiddenMultiSourceCrossAttentionResamplerAdapter):
+    """Backward-compatible name for multi-layer WAN hidden fusion."""
+
+    def __init__(self, *args, num_layers: int, **kwargs) -> None:
+        super().__init__(*args, num_sources=num_layers, **kwargs)
 
 
 class CrossAttentionBlock(nn.Module):

@@ -32,6 +32,9 @@ from probe.adapter import (
     WanHiddenCrossAttentionResamplerAdapter,
     WanHiddenGrid2DConvAdapter,
     WanHiddenGrid2DPoolAdapter,
+    WanHiddenMultiLayerCrossAttentionResamplerAdapter,
+    WanHiddenMultiSourceCrossAttentionResamplerAdapter,
+    WanLatentCrossAttentionResamplerAdapter,
     WanPredX0LatentConvAdapter,
 )
 from vggt_nova_adapter_common_raw import (
@@ -70,22 +73,58 @@ from train_vggt_nova_adapter import (
 
 FEATURE_KIND_HIDDEN = "hidden"
 FEATURE_KIND_PRED_X0_LATENT = "pred_x0_latent"
+FEATURE_KIND_MODEL_OUTPUT_LATENT = "model_output_latent"
 ADAPTER_TYPE_CONV2D_MLP = "conv2d_mlp"
 ADAPTER_TYPE_GRID2D_POOL = "grid2d_pool"
 ADAPTER_TYPE_GRID2D_CONV = "grid2d_conv"
 ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER = "wan_cross_attn_resampler"
+ADAPTER_TYPE_WAN_CROSS_ATTN_MULTILAYER_RESAMPLER = "wan_cross_attn_multilayer_resampler"
+ADAPTER_TYPE_WAN_CROSS_ATTN_MULTITIME_RESAMPLER = "wan_cross_attn_multitime_resampler"
+ADAPTER_TYPE_WAN_LATENT_CROSS_ATTN_RESAMPLER = "wan_latent_cross_attn_resampler"
 
 
 def safe_cache_sample_id(sample_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", str(sample_id)).strip("_")
 
 
+def is_latent_feature_kind(feature_kind: str) -> bool:
+    return feature_kind in {FEATURE_KIND_PRED_X0_LATENT, FEATURE_KIND_MODEL_OUTPUT_LATENT}
+
+
 def wan_cache_path(cache_root: Path, timestep: int, layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> Path:
-    if feature_kind == FEATURE_KIND_PRED_X0_LATENT:
-        return cache_root / f"t{int(timestep):03d}" / FEATURE_KIND_PRED_X0_LATENT / f"{safe_cache_sample_id(sample_id)}.pt"
+    if is_latent_feature_kind(feature_kind):
+        return cache_root / f"t{int(timestep):03d}" / feature_kind / f"{safe_cache_sample_id(sample_id)}.pt"
     if feature_kind != FEATURE_KIND_HIDDEN:
         raise ValueError(f"Unsupported WAN feature kind {feature_kind!r}")
     return cache_root / f"t{int(timestep):03d}" / f"layer{int(layer):02d}" / f"{safe_cache_sample_id(sample_id)}.pt"
+
+
+def parse_wan_layers(value: str | None, fallback_layer: int) -> tuple[int, ...]:
+    if value is None or str(value).strip() == "":
+        return (int(fallback_layer),)
+    layers: list[int] = []
+    for item in str(value).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        layers.append(int(item))
+    if not layers:
+        raise ValueError("--wan_layers was provided but no valid layer ids were parsed")
+    return tuple(layers)
+
+
+def parse_wan_timesteps(value: str | None, fallback_timestep: int) -> tuple[int, ...]:
+    if value is None or str(value).strip() == "":
+        return (int(fallback_timestep),)
+    timesteps: list[int] = []
+    for item in str(value).split(","):
+        item = item.strip()
+        if not item:
+            continue
+        timesteps.append(int(item))
+    if not timesteps:
+        raise ValueError("--wan_timesteps was provided but no valid timestep ids were parsed")
+    return tuple(timesteps)
 
 
 @lru_cache(maxsize=128)
@@ -170,6 +209,74 @@ def get_wan_t2v_cached_features(
     return normalize_wan_features(selected, mode=feature_norm, eps=feature_norm_eps).contiguous()
 
 
+def get_wan_t2v_multilayer_cached_features(
+    batch,
+    device,
+    feature_cache_dir: str,
+    wan_timestep: int,
+    wan_layers: tuple[int, ...],
+    feature_mode: str = "cache",
+    shuffle_seed: int = 17,
+    feature_norm: str = "none",
+    feature_norm_eps: float = 1e-6,
+) -> torch.Tensor:
+    if len(wan_layers) < 2:
+        raise ValueError(f"Multi-layer WAN features require at least two layers, got {wan_layers}")
+    per_layer = [
+        get_wan_t2v_cached_features(
+            batch,
+            device,
+            feature_cache_dir,
+            wan_timestep,
+            int(layer),
+            feature_mode,
+            shuffle_seed,
+            feature_norm,
+            feature_norm_eps,
+            FEATURE_KIND_HIDDEN,
+        )
+        for layer in wan_layers
+    ]
+    shapes = {tuple(features.shape) for features in per_layer}
+    if len(shapes) != 1:
+        raise ValueError(f"WAN multi-layer cache feature shapes must match, got {sorted(shapes)}")
+    return torch.cat(per_layer, dim=1).contiguous()
+
+
+def get_wan_t2v_multitime_cached_features(
+    batch,
+    device,
+    feature_cache_dir: str,
+    wan_timesteps: tuple[int, ...],
+    wan_layer: int,
+    feature_mode: str = "cache",
+    shuffle_seed: int = 17,
+    feature_norm: str = "none",
+    feature_norm_eps: float = 1e-6,
+) -> torch.Tensor:
+    if len(wan_timesteps) < 2:
+        raise ValueError(f"Multi-timestep WAN features require at least two timesteps, got {wan_timesteps}")
+    per_timestep = [
+        get_wan_t2v_cached_features(
+            batch,
+            device,
+            feature_cache_dir,
+            int(timestep),
+            int(wan_layer),
+            feature_mode,
+            shuffle_seed,
+            feature_norm,
+            feature_norm_eps,
+            FEATURE_KIND_HIDDEN,
+        )
+        for timestep in wan_timesteps
+    ]
+    shapes = {tuple(features.shape) for features in per_timestep}
+    if len(shapes) != 1:
+        raise ValueError(f"WAN multi-timestep cache feature shapes must match, got {sorted(shapes)}")
+    return torch.cat(per_timestep, dim=1).contiguous()
+
+
 def read_wan_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layer: int, sample_id: str, feature_kind: str = FEATURE_KIND_HIDDEN) -> dict:
     path = wan_cache_path(Path(feature_cache_dir), int(wan_timestep), int(wan_layer), str(sample_id), feature_kind)
     if not path.exists():
@@ -178,6 +285,156 @@ def read_wan_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layer
     if isinstance(payload, dict) and isinstance(payload.get("metadata"), dict):
         return dict(payload["metadata"])
     return {}
+
+
+def infer_wan_hidden_grid_shape(metadata: dict, selected: torch.Tensor, num_sources: int = 1) -> tuple[int, int, int]:
+    if selected.ndim != 3:
+        raise ValueError(f"Expected loaded WAN features [B,tokens,dim], got {tuple(selected.shape)}")
+    token_count = int(selected.shape[1])
+    num_sources = max(1, int(num_sources))
+    if token_count % num_sources != 0:
+        raise ValueError(f"WAN token count {token_count} is not divisible by num_sources={num_sources}")
+    tokens_per_source = token_count // num_sources
+    if isinstance(metadata, dict):
+        grid_shape = metadata.get("grid_shape")
+        if isinstance(grid_shape, (list, tuple)) and len(grid_shape) >= 3:
+            temporal, height, width = (int(grid_shape[0]), int(grid_shape[1]), int(grid_shape[2]))
+            if temporal * height * width == tokens_per_source:
+                return temporal, height, width
+        full_feature_shape = metadata.get("full_feature_shape")
+        if isinstance(full_feature_shape, (list, tuple)) and len(full_feature_shape) >= 4:
+            temporal = len(metadata.get("temporal_indices", [])) or 2
+            height, width = int(full_feature_shape[1]), int(full_feature_shape[2])
+            if temporal * height * width == tokens_per_source:
+                return temporal, height, width
+        feature_shape = metadata.get("feature_shape")
+        if isinstance(feature_shape, (list, tuple)) and len(feature_shape) >= 2:
+            meta_tokens = int(feature_shape[0])
+            if meta_tokens != tokens_per_source:
+                raise ValueError(
+                    f"WAN cache metadata feature_shape token count {meta_tokens} does not match "
+                    f"loaded per-source tensor {tokens_per_source}"
+                )
+    if tokens_per_source == 2 * 30 * 52:
+        return 2, 30, 52
+    if tokens_per_source == 2 * 45 * 80:
+        return 2, 45, 80
+    if tokens_per_source % 2 == 0:
+        spatial = tokens_per_source // 2
+        for height in (30, 45, 24, 60):
+            if spatial % height == 0:
+                return 2, height, spatial // height
+    raise ValueError(
+        "Could not infer WAN hidden grid shape from metadata/tensor. "
+        f"metadata grid_shape={metadata.get('grid_shape') if isinstance(metadata, dict) else None}, "
+        f"selected_shape={tuple(selected.shape)}, num_sources={num_sources}"
+    )
+
+
+def infer_wan_latent_grid_shape(metadata: dict, selected: torch.Tensor) -> tuple[int, int, int]:
+    if selected.ndim != 3:
+        raise ValueError(f"Expected loaded WAN latent features [B,tokens,dim], got {tuple(selected.shape)}")
+    token_count = int(selected.shape[1])
+    if isinstance(metadata, dict):
+        full_feature_shape = metadata.get("full_feature_shape")
+        if isinstance(full_feature_shape, (list, tuple)) and len(full_feature_shape) >= 4:
+            temporal = len(metadata.get("temporal_indices", [])) or 2
+            height, width = int(full_feature_shape[1]), int(full_feature_shape[2])
+            if temporal * height * width == token_count:
+                return temporal, height, width
+        feature_shape = metadata.get("feature_shape")
+        if isinstance(feature_shape, (list, tuple)) and len(feature_shape) >= 2:
+            meta_tokens = int(feature_shape[0])
+            if meta_tokens != token_count:
+                raise ValueError(
+                    f"WAN latent cache metadata feature_shape token count {meta_tokens} does not match "
+                    f"loaded tensor {token_count}"
+                )
+    if token_count == 2 * 60 * 104:
+        return 2, 60, 104
+    if token_count % 2 == 0:
+        spatial = token_count // 2
+        for height in (60, 45, 30, 24):
+            if spatial % height == 0:
+                return 2, height, spatial // height
+    raise ValueError(
+        "Could not infer WAN latent grid shape from metadata/tensor. "
+        f"metadata full_feature_shape={metadata.get('full_feature_shape') if isinstance(metadata, dict) else None}, "
+        f"selected_shape={tuple(selected.shape)}"
+    )
+
+
+def read_wan_multilayer_cache_metadata(feature_cache_dir: str, wan_timestep: int, wan_layers: tuple[int, ...], sample_id: str) -> list[dict]:
+    return [
+        {
+            "layer": int(layer),
+            "metadata": read_wan_cache_metadata(
+                feature_cache_dir,
+                int(wan_timestep),
+                int(layer),
+                sample_id,
+                FEATURE_KIND_HIDDEN,
+            ),
+        }
+        for layer in wan_layers
+    ]
+
+
+def read_wan_multitime_cache_metadata(feature_cache_dir: str, wan_timesteps: tuple[int, ...], wan_layer: int, sample_id: str) -> list[dict]:
+    return [
+        {
+            "timestep": int(timestep),
+            "metadata": read_wan_cache_metadata(
+                feature_cache_dir,
+                int(timestep),
+                int(wan_layer),
+                sample_id,
+                FEATURE_KIND_HIDDEN,
+            ),
+        }
+        for timestep in wan_timesteps
+    ]
+
+
+def load_wan_features_for_batch(batch, device, args, wan_layers: tuple[int, ...], wan_timesteps: tuple[int, ...]) -> torch.Tensor:
+    if len(wan_layers) > 1 and len(wan_timesteps) > 1:
+        raise ValueError("Combining multiple WAN layers and multiple timesteps in one run is not supported")
+    if len(wan_timesteps) > 1:
+        return get_wan_t2v_multitime_cached_features(
+            batch,
+            device,
+            args.wan_feature_cache_dir,
+            wan_timesteps,
+            int(wan_layers[0]),
+            args.wan_feature_mode,
+            args.wan_feature_shuffle_seed,
+            args.wan_feature_norm,
+            args.wan_feature_norm_eps,
+        )
+    if len(wan_layers) > 1:
+        return get_wan_t2v_multilayer_cached_features(
+            batch,
+            device,
+            args.wan_feature_cache_dir,
+            args.wan_timestep,
+            wan_layers,
+            args.wan_feature_mode,
+            args.wan_feature_shuffle_seed,
+            args.wan_feature_norm,
+            args.wan_feature_norm_eps,
+        )
+    return get_wan_t2v_cached_features(
+        batch,
+        device,
+        args.wan_feature_cache_dir,
+        int(wan_timesteps[0]),
+        int(wan_layers[0]),
+        args.wan_feature_mode,
+        args.wan_feature_shuffle_seed,
+        args.wan_feature_norm,
+        args.wan_feature_norm_eps,
+        args.wan_feature_kind,
+    )
 
 
 def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, output_dir: Path | None = None, global_step: int | None = None, save_previews: bool = False):
@@ -201,24 +458,15 @@ def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, out
     quality_counts = {key: 0 for key in QUALITY_METRIC_KEYS}
     preview_records = []
     preview_limit = max(0, int(args.val_preview_samples))
+    wan_layers = tuple(int(layer) for layer in getattr(args, "wan_layers_parsed", (int(args.wan_layer),)))
+    wan_timesteps = tuple(int(timestep) for timestep in getattr(args, "wan_timesteps_parsed", (int(args.wan_timestep),)))
     with torch.no_grad():
         for batch_idx, batch in enumerate(loader):
             if max_batches is not None and max_batches > 0 and batch_idx >= max_batches:
                 break
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
-            selected = get_wan_t2v_cached_features(
-                batch,
-                device,
-                args.wan_feature_cache_dir,
-                args.wan_timestep,
-                args.wan_layer,
-                args.wan_feature_mode,
-                args.wan_feature_shuffle_seed,
-                args.wan_feature_norm,
-                args.wan_feature_norm_eps,
-                args.wan_feature_kind,
-            )
+            selected = load_wan_features_for_batch(batch, device, args, wan_layers, wan_timesteps)
             tokens = adapter_module(selected)
             pred = sample_decoder(decoder, tokens, args.num_queries, meta["fm_step_size"], args.seed + batch_idx, images.shape[1])
             target = get_targets(
@@ -340,10 +588,18 @@ def parse_args():
             ADAPTER_TYPE_GRID2D_POOL,
             ADAPTER_TYPE_GRID2D_CONV,
             ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER,
+            ADAPTER_TYPE_WAN_CROSS_ATTN_MULTILAYER_RESAMPLER,
+            ADAPTER_TYPE_WAN_CROSS_ATTN_MULTITIME_RESAMPLER,
+            ADAPTER_TYPE_WAN_LATENT_CROSS_ATTN_RESAMPLER,
         ),
     )
     parser.add_argument("--adapter_heads", type=int, default=8)
     parser.add_argument("--adapter_mlp_ratio", type=float, default=2.0)
+    parser.add_argument(
+        "--adapter_gated",
+        action="store_true",
+        help="Use zero-initialized residual gates in WAN cross-attention readout blocks.",
+    )
     parser.add_argument("--max_steps", type=int, default=3000)
     parser.add_argument("--save_every", type=int, default=500)
     parser.add_argument("--val_every", type=int, default=500)
@@ -373,8 +629,22 @@ def parse_args():
     parser.add_argument("--image_root_map", default=None)
     parser.add_argument("--wan_feature_cache_dir", required=True)
     parser.add_argument("--wan_timestep", type=int, default=749)
+    parser.add_argument(
+        "--wan_timesteps",
+        default="",
+        help="Optional comma-separated hidden timestep list for multi-timestep WAN adapters; empty preserves --wan_timestep.",
+    )
     parser.add_argument("--wan_layer", type=int, default=20)
-    parser.add_argument("--wan_feature_kind", default=FEATURE_KIND_HIDDEN, choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT))
+    parser.add_argument(
+        "--wan_layers",
+        default="",
+        help="Optional comma-separated hidden layer list for multi-layer WAN adapters; empty preserves --wan_layer.",
+    )
+    parser.add_argument(
+        "--wan_feature_kind",
+        default=FEATURE_KIND_HIDDEN,
+        choices=(FEATURE_KIND_HIDDEN, FEATURE_KIND_PRED_X0_LATENT, FEATURE_KIND_MODEL_OUTPUT_LATENT),
+    )
     parser.add_argument("--wan_feature_mode", default="cache", choices=("cache", "zero", "sample_shuffle"))
     parser.add_argument("--wan_feature_shuffle_seed", type=int, default=17001)
     parser.add_argument(
@@ -415,14 +685,42 @@ def main():
     dist_ctx = init_distributed_mode()
     try:
         args = parse_args()
-        if args.adapter_type == ADAPTER_TYPE_CONV2D_MLP and args.wan_feature_kind != FEATURE_KIND_PRED_X0_LATENT:
-            raise ValueError("--adapter_type conv2d_mlp is only supported with --wan_feature_kind pred_x0_latent")
+        if args.adapter_type == ADAPTER_TYPE_CONV2D_MLP and not is_latent_feature_kind(args.wan_feature_kind):
+            raise ValueError(
+                "--adapter_type conv2d_mlp is only supported with latent WAN feature kinds: "
+                "pred_x0_latent or model_output_latent"
+            )
+        if args.adapter_type == ADAPTER_TYPE_WAN_LATENT_CROSS_ATTN_RESAMPLER and not is_latent_feature_kind(args.wan_feature_kind):
+            raise ValueError(
+                "--adapter_type wan_latent_cross_attn_resampler is only supported with latent WAN feature kinds: "
+                "pred_x0_latent or model_output_latent"
+            )
         if args.adapter_type == ADAPTER_TYPE_GRID2D_POOL and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
             raise ValueError("--adapter_type grid2d_pool is only supported with --wan_feature_kind hidden")
         if args.adapter_type == ADAPTER_TYPE_GRID2D_CONV and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
             raise ValueError("--adapter_type grid2d_conv is only supported with --wan_feature_kind hidden")
         if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
             raise ValueError("--adapter_type wan_cross_attn_resampler is only supported with --wan_feature_kind hidden")
+        if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_MULTILAYER_RESAMPLER and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--adapter_type wan_cross_attn_multilayer_resampler is only supported with --wan_feature_kind hidden")
+        if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_MULTITIME_RESAMPLER and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--adapter_type wan_cross_attn_multitime_resampler is only supported with --wan_feature_kind hidden")
+        args.wan_layers_parsed = parse_wan_layers(args.wan_layers, args.wan_layer)
+        args.wan_timesteps_parsed = parse_wan_timesteps(args.wan_timesteps, args.wan_timestep)
+        if len(args.wan_layers_parsed) > 1 and len(args.wan_timesteps_parsed) > 1:
+            raise ValueError("--wan_layers and --wan_timesteps cannot both contain multiple values")
+        if len(args.wan_layers_parsed) > 1 and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--wan_layers multi-layer mode is only supported with --wan_feature_kind hidden")
+        if len(args.wan_timesteps_parsed) > 1 and args.wan_feature_kind != FEATURE_KIND_HIDDEN:
+            raise ValueError("--wan_timesteps multi-timestep mode is only supported with --wan_feature_kind hidden")
+        if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_MULTILAYER_RESAMPLER and len(args.wan_layers_parsed) < 2:
+            raise ValueError("--adapter_type wan_cross_attn_multilayer_resampler requires --wan_layers with at least two layers")
+        if args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_MULTITIME_RESAMPLER and len(args.wan_timesteps_parsed) < 2:
+            raise ValueError("--adapter_type wan_cross_attn_multitime_resampler requires --wan_timesteps with at least two timesteps")
+        if len(args.wan_layers_parsed) > 1 and args.adapter_type != ADAPTER_TYPE_WAN_CROSS_ATTN_MULTILAYER_RESAMPLER:
+            raise ValueError("--wan_layers with multiple layers requires --adapter_type wan_cross_attn_multilayer_resampler")
+        if len(args.wan_timesteps_parsed) > 1 and args.adapter_type != ADAPTER_TYPE_WAN_CROSS_ATTN_MULTITIME_RESAMPLER:
+            raise ValueError("--wan_timesteps with multiple timesteps requires --adapter_type wan_cross_attn_multitime_resampler")
         if args.debug_one_batch:
             args.max_steps = 1
             args.save_every = 1
@@ -473,31 +771,54 @@ def main():
         first_batch = next(iter(train_loader))
         first_batch = move_batch_to_device(first_batch, device)
         first_images = images_from_batch(first_batch)
-        selected = get_wan_t2v_cached_features(
-            first_batch,
-            device,
-            args.wan_feature_cache_dir,
-            args.wan_timestep,
-            args.wan_layer,
-            args.wan_feature_mode,
-            args.wan_feature_shuffle_seed,
-            args.wan_feature_norm,
-            args.wan_feature_norm_eps,
-            args.wan_feature_kind,
-        )
+        selected = load_wan_features_for_batch(first_batch, device, args, args.wan_layers_parsed, args.wan_timesteps_parsed)
         if is_main:
             print("Feature backbone: wan_t2v_cache")
             print(f"Requested WAN T2V timestep/layer: {args.wan_timestep}/{args.wan_layer}")
+            print(f"Requested WAN T2V timesteps: {list(args.wan_timesteps_parsed)}")
+            print(f"Requested WAN T2V layers: {list(args.wan_layers_parsed)}")
             print(f"WAN feature kind: {args.wan_feature_kind}")
             print(f"WAN feature mode: {args.wan_feature_mode}")
             print(f"WAN feature norm: {args.wan_feature_norm} eps={args.wan_feature_norm_eps}")
             print(f"Selected WAN feature shape: {tuple(selected.shape)}")
-        wan_cache_metadata = read_wan_cache_metadata(
-            args.wan_feature_cache_dir,
-            args.wan_timestep,
-            args.wan_layer,
-            first_batch["scene_ids"][0],
-            args.wan_feature_kind,
+        if len(args.wan_timesteps_parsed) > 1:
+            wan_cache_metadata = {}
+            wan_layer_metadata = []
+            wan_timestep_metadata = read_wan_multitime_cache_metadata(
+                args.wan_feature_cache_dir,
+                args.wan_timesteps_parsed,
+                int(args.wan_layers_parsed[0]),
+                first_batch["scene_ids"][0],
+            )
+        elif len(args.wan_layers_parsed) > 1:
+            wan_cache_metadata = {}
+            wan_layer_metadata = read_wan_multilayer_cache_metadata(
+                args.wan_feature_cache_dir,
+                args.wan_timestep,
+                args.wan_layers_parsed,
+                first_batch["scene_ids"][0],
+            )
+            wan_timestep_metadata = []
+        else:
+            wan_cache_metadata = read_wan_cache_metadata(
+                args.wan_feature_cache_dir,
+                int(args.wan_timesteps_parsed[0]),
+                int(args.wan_layers_parsed[0]),
+                first_batch["scene_ids"][0],
+                args.wan_feature_kind,
+            )
+            wan_layer_metadata = []
+            wan_timestep_metadata = []
+        wan_num_sources = max(1, len(args.wan_layers_parsed), len(args.wan_timesteps_parsed))
+        wan_hidden_grid_shape = (
+            infer_wan_hidden_grid_shape(wan_cache_metadata, selected, num_sources=wan_num_sources)
+            if args.wan_feature_kind == FEATURE_KIND_HIDDEN
+            else ()
+        )
+        wan_latent_grid_shape = (
+            infer_wan_latent_grid_shape(wan_cache_metadata, selected)
+            if is_latent_feature_kind(args.wan_feature_kind)
+            else ()
         )
 
         if args.adapter_type == "mlp":
@@ -534,6 +855,20 @@ def main():
                 output_dim=meta["token_dim"],
                 output_tokens=meta["num_scene_tokens"],
             )
+        elif args.adapter_type == ADAPTER_TYPE_WAN_LATENT_CROSS_ATTN_RESAMPLER:
+            adapter = WanLatentCrossAttentionResamplerAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+                num_heads=args.adapter_heads,
+                mlp_ratio=args.adapter_mlp_ratio,
+                gated=args.adapter_gated,
+                temporal_tokens=int(wan_latent_grid_shape[0]),
+                latent_height=int(wan_latent_grid_shape[1]),
+                latent_width=int(wan_latent_grid_shape[2]),
+            )
         elif args.adapter_type == ADAPTER_TYPE_GRID2D_POOL:
             adapter = WanHiddenGrid2DPoolAdapter(
                 input_dim=selected.shape[-1],
@@ -541,6 +876,9 @@ def main():
                 output_tokens=meta["num_scene_tokens"],
                 hidden_dim=args.adapter_hidden_dim,
                 adapter_layers=args.adapter_layers,
+                temporal_tokens=int(wan_hidden_grid_shape[0]),
+                grid_height=int(wan_hidden_grid_shape[1]),
+                grid_width=int(wan_hidden_grid_shape[2]),
             )
         elif args.adapter_type == ADAPTER_TYPE_GRID2D_CONV:
             adapter = WanHiddenGrid2DConvAdapter(
@@ -549,6 +887,9 @@ def main():
                 output_tokens=meta["num_scene_tokens"],
                 hidden_dim=args.adapter_hidden_dim,
                 adapter_layers=args.adapter_layers,
+                temporal_tokens=int(wan_hidden_grid_shape[0]),
+                grid_height=int(wan_hidden_grid_shape[1]),
+                grid_width=int(wan_hidden_grid_shape[2]),
             )
         elif args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_RESAMPLER:
             adapter = WanHiddenCrossAttentionResamplerAdapter(
@@ -559,6 +900,40 @@ def main():
                 adapter_layers=args.adapter_layers,
                 num_heads=args.adapter_heads,
                 mlp_ratio=args.adapter_mlp_ratio,
+                gated=args.adapter_gated,
+                temporal_tokens=int(wan_hidden_grid_shape[0]),
+                grid_height=int(wan_hidden_grid_shape[1]),
+                grid_width=int(wan_hidden_grid_shape[2]),
+            )
+        elif args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_MULTILAYER_RESAMPLER:
+            adapter = WanHiddenMultiLayerCrossAttentionResamplerAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                num_layers=len(args.wan_layers_parsed),
+                hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+                num_heads=args.adapter_heads,
+                mlp_ratio=args.adapter_mlp_ratio,
+                gated=args.adapter_gated,
+                temporal_tokens=int(wan_hidden_grid_shape[0]),
+                grid_height=int(wan_hidden_grid_shape[1]),
+                grid_width=int(wan_hidden_grid_shape[2]),
+            )
+        elif args.adapter_type == ADAPTER_TYPE_WAN_CROSS_ATTN_MULTITIME_RESAMPLER:
+            adapter = WanHiddenMultiSourceCrossAttentionResamplerAdapter(
+                input_dim=selected.shape[-1],
+                output_dim=meta["token_dim"],
+                output_tokens=meta["num_scene_tokens"],
+                num_sources=len(args.wan_timesteps_parsed),
+                hidden_dim=args.adapter_hidden_dim,
+                adapter_layers=args.adapter_layers,
+                num_heads=args.adapter_heads,
+                mlp_ratio=args.adapter_mlp_ratio,
+                gated=args.adapter_gated,
+                temporal_tokens=int(wan_hidden_grid_shape[0]),
+                grid_height=int(wan_hidden_grid_shape[1]),
+                grid_width=int(wan_hidden_grid_shape[2]),
             )
         else:
             raise ValueError(f"Unsupported adapter_type={args.adapter_type!r}")
@@ -588,6 +963,12 @@ def main():
             {
                 "feature_backbone": "wan_t2v_cache",
                 "selected_feature_shape": list(selected.shape),
+                "wan_hidden_grid_shape": list(wan_hidden_grid_shape),
+                "wan_latent_grid_shape": list(wan_latent_grid_shape),
+                "wan_timesteps": [int(timestep) for timestep in args.wan_timesteps_parsed],
+                "num_wan_timesteps": int(len(args.wan_timesteps_parsed)),
+                "wan_layers": [int(layer) for layer in args.wan_layers_parsed],
+                "num_wan_layers": int(len(args.wan_layers_parsed)),
                 "wan_cache_metadata": {
                     key: wan_cache_metadata.get(key)
                     for key in (
@@ -603,17 +984,33 @@ def main():
                         "latent_noise_applied",
                         "low_noise_index",
                         "feature_kind",
+                        "feature_source",
+                        "source",
+                        "window_mode",
+                        "condition_frames",
+                        "model_id",
+                        "model_local_dir",
+                        "height",
+                        "width",
+                        "grid_shape",
+                        "full_feature_shape",
                         "source_latent_shape",
                         "transformer_latent_shape",
                         "model_output_shape",
                         "pred_x0_latent_shape",
+                        "model_output_latent_shape",
+                        "model_output_formula",
                         "feature_shape",
                     )
                     if key in wan_cache_metadata
                 },
+                "wan_layer_metadata": wan_layer_metadata,
+                "wan_timestep_metadata": wan_timestep_metadata,
                 "adapter_type": args.adapter_type,
                 "adapter_heads": args.adapter_heads,
                 "adapter_mlp_ratio": args.adapter_mlp_ratio,
+                "adapter_gated": bool(args.adapter_gated),
+                "adapter_attention_gated": getattr(unwrap_adapter(probe_model), "gated", None),
                 "adapter_param_count": count_parameters(unwrap_adapter(probe_model)),
                 "adapter_conv_readout_shape": list(getattr(unwrap_adapter(probe_model), "conv_readout_shape", ())),
                 "adapter_grid_input_shape": list(getattr(unwrap_adapter(probe_model), "grid_input_shape", ())),
@@ -681,18 +1078,7 @@ def main():
                 batch = next(data_iter)
             batch = move_batch_to_device(batch, device)
             images = images_from_batch(batch)
-            selected = get_wan_t2v_cached_features(
-                batch,
-                device,
-                args.wan_feature_cache_dir,
-                args.wan_timestep,
-                args.wan_layer,
-                args.wan_feature_mode,
-                args.wan_feature_shuffle_seed,
-                args.wan_feature_norm,
-                args.wan_feature_norm_eps,
-                args.wan_feature_kind,
-            )
+            selected = load_wan_features_for_batch(batch, device, args, args.wan_layers_parsed, args.wan_timesteps_parsed)
             target = get_targets(batch, meta["query_source"], max_points=args.num_queries, norm_mode=meta.get("norm_mode", "none"))
 
             optimizer.zero_grad(set_to_none=True)
@@ -877,13 +1263,23 @@ def main():
             final_metrics = {
                 "feature_backbone": "wan_t2v_cache",
                 "wan_timestep": int(args.wan_timestep),
+                "wan_timesteps": [int(timestep) for timestep in args.wan_timesteps_parsed],
+                "num_wan_timesteps": int(len(args.wan_timesteps_parsed)),
                 "wan_layer": int(args.wan_layer),
+                "wan_layers": [int(layer) for layer in args.wan_layers_parsed],
+                "num_wan_layers": int(len(args.wan_layers_parsed)),
                 "wan_feature_kind": args.wan_feature_kind,
                 "wan_feature_mode": args.wan_feature_mode,
                 "wan_feature_shuffle_seed": int(args.wan_feature_shuffle_seed),
                 "wan_feature_norm": args.wan_feature_norm,
                 "wan_feature_norm_eps": float(args.wan_feature_norm_eps),
+                "adapter_type": args.adapter_type,
+                "adapter_gated": bool(args.adapter_gated),
+                "wan_hidden_grid_shape": config.get("wan_hidden_grid_shape", []),
+                "wan_latent_grid_shape": config.get("wan_latent_grid_shape", []),
                 "wan_cache_metadata": config.get("wan_cache_metadata", {}),
+                "wan_layer_metadata": config.get("wan_layer_metadata", []),
+                "wan_timestep_metadata": config.get("wan_timestep_metadata", []),
                 "first_loss": first_loss,
                 "final_loss": final_loss,
                 "best_loss": best_loss,
@@ -925,7 +1321,10 @@ def main():
                     },
                     step=global_step,
                 )
-                swanlab.finish()
+                try:
+                    swanlab.finish()
+                except Exception as exc:
+                    print(f"SwanLab finish warning: {type(exc).__name__}: {exc}")
             print(f"First loss: {first_loss}")
             print(f"Final loss: {final_loss}")
             print(f"Output directory: {output_dir}")

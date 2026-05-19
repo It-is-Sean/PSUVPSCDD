@@ -1,5 +1,201 @@
 # Experiment history summary
 
+## 2026-05-19 WAN final pause
+
+WAN Route2 is paused as a main branch after the 2026-05-19 audit. The final consolidated summary is `docs/probe/wan_summary_2026-05-19.md`.
+
+Frozen conclusion:
+
+- WAN hidden states contain usable spatial signal, but they require a learned CA resampler to align with NOVA/FM condition tokens.
+- Historical best WAN is `t499/layer14 + wan_cross_attn_resampler`, F@0.10 `0.5012956284974035`, while repeated settings are closer to `0.49`.
+- WAN remains far below clean-GT VGGT layer16, F@0.10 `0.6860468604251301`.
+- Noise/noise-free settings, token normalization, pair_tiled81, latent tensors, fixed grid readouts, multi-source fusion, FLF2V hidden, gated CA, and L4 capacity did not justify further broad WAN sweeps.
+- Future WAN work is appendix-only; the active model-coverage direction moves to the next backbone under the same SCRREAM / NOVA protocol.
+
+## 2026-05-19 WAN hidden CA stability/capacity completion
+
+The hidden CA stability/capacity branch completed after the latent tensor-choice and FLF2V audits. All jobs exited `0:0` on `air-node-02`.
+
+| job | setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 | interpretation |
+| ---: | --- | ---: | ---: | ---: | --- |
+| `86547` | standard hidden CA seed23, `t249/layer14` | `0.48706357506233194` | `0.4482837840914726` | `0.11202508273224036` | close to full-grid `t249/layer14`, confirms variance |
+| `86548` | standard hidden CA seed23, `t499/layer14` | `0.4591392560862819` | `0.4479780395825704` | `0.14107579924166203` | below historical `t499/layer14` peak |
+| `86549` | gated hidden CA seed17, `t249/layer14` | `0.4505522726705196` | `0.46173084527254105` | `0.11595033543805282` | gated residual CA negative by F-score |
+| `86550` | gated hidden CA seed17, `t499/layer14` | `0.4866296484297818` | `0.45513606319824856` | `0.12565729891260466` | decent but below historical peak |
+| `86553` | standard hidden CA L4/H512 seed17, `t249/layer14` | `0.4919946248489035` | `0.4724609777331352` | `0.11948200377325217` | best recent repeated-F result, small positive |
+| `86554` | standard hidden CA L4/H512 seed17, `t499/layer14` | `0.46280321302050603` | `0.44610939423243207` | `0.13269949393967786` | negative versus historical `t499/layer14` |
+
+Interpretation:
+
+- hidden CA remains the only clearly positive WAN readout family;
+- L4 `t249/layer14` slightly improves over the full-grid repeated `t249/layer14` F-score (`0.49199` vs `0.48914`), but it does not beat the historical `t499/layer14` peak and its p90 is worse than full-grid `t249/layer09`;
+- gated CA does not justify expansion;
+- seed variance is large enough that `t499/layer14=0.5013` should still be treated as a historical peak, not a stable mean.
+
+Recommended next WAN-only checks:
+
+1. visually inspect full-grid `t249/layer09`, full-grid `t249/layer14`, and L4 `t249/layer14`;
+2. if continuing this branch, run L4 `t249/layer09` and one L4 `t249/layer14` seed repeat;
+3. do not expand latent tensors, simple fusion, FLF2V hidden, gated CA, or weak late layers unless visuals contradict the metrics.
+
+## 2026-05-19 WAN latent audit and hidden CA stability follow-up
+
+The previous hidden-fusion branch finished negative, and the first FLF2V hidden run also completed. T2V latent tensor-choice audits were then completed with both fixed Conv2d and learned latent-grid CA readouts. They did not beat the hidden CA baselines, so the WAN-only search moved back to the hidden CA-resampler branch. The stability/capacity jobs described in this section later completed; see the section above.
+
+Completed results:
+
+| job | setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 | interpretation |
+| ---: | --- | ---: | ---: | ---: | --- |
+| `86494` | T2V CA multi-timestep `249+499+749/layer14` | `0.45213117002164466` | `0.49119475732247037` | `0.12659800921877226` | negative versus single-layer CA |
+| `86520` | FLF2V hidden `pair_endpoint81 t249/layer14` | `0.42897984457682026` | `0.5051772321263949` | `0.14052311765650907` | live but weaker than T2V CA |
+| `86536` | T2V `model_output_latent t499 + conv2d_mlp` | `0.4199299775478907` | `0.6285491685072581` | `0.44791099180777866` | negative versus hidden MLP and hidden CA |
+| `86540` | T2V `model_output_latent t499 + latent CA resampler` | `0.4289946537162989` | `0.5942087918519974` | `0.19963246708114943` | better Chamfer than Conv2d, still negative versus hidden CA |
+| `86543` | T2V `pred_x0_latent t499 + latent CA resampler` | `0.43766060222664477` | `0.5175856028993925` | `0.20880577837427458` | best latent learned-readout result, still below hidden CA |
+
+FLF2V cache state:
+
+- checkpoint retry/preflight job `86500` completed after the first `86497` incomplete-read failure;
+- cache shard jobs `86515` / `86516` / `86517` / `86518` completed `329/329` samples under `experiments/probe3d/feature_cache/scrream_wan_flf2v14b_pair_endpoint81_480/t249/layer14`;
+- feature shape is `[3120,5120]` at 480P, with `pair_endpoint81`, first/last-frame conditioning, and temporal indices `[0,20]`;
+- smoke train job `86519` completed before the formal `86520`.
+
+Active follow-up:
+
+- `prepare_scrream_wan_t2v_feature_cache.py` now supports `--feature_kind model_output_latent`, caching raw WAN transformer `output.sample` latent slices as `[12480,16]`;
+- `train_wan_t2v_nova_adapter.py` accepts `--wan_feature_kind model_output_latent`;
+- `conv2d_mlp` is valid for `pred_x0_latent` and `model_output_latent`;
+- `WanLatentCrossAttentionResamplerAdapter` / `--adapter_type wan_latent_cross_attn_resampler` is now implemented for latent feature kinds, restoring `[B,2,60,104,16]` and cross-attending NOVA query tokens to the full latent grid;
+- `slurm/scrream_wan_t2v_precompute.sbatch` and `slurm/scrream_wan_t2v_ablation_pack_train.sbatch` have default cache/run prefixes for `model_output_latent`;
+- Slurm chain `86534 -> 86535 -> 86536` completed the cache / one-step smoke / formal train path for `ctx81 normal t499 model_output_latent + conv2d_mlp`; the formal result was negative.
+- Learned latent-readout follow-ups were started after the Conv2d result: `86539` validated `model_output_latent + wan_latent_cross_attn_resampler`, formal job `86540` completed negative, cancelled high-memory pred-x0 smoke `86541` was replaced by lower-memory smoke `86542`, and formal `pred_x0_latent + wan_latent_cross_attn_resampler` job `86543` completed negative versus hidden CA.
+
+Follow-up submitted at that timestamp:
+
+- `train_wan_t2v_nova_adapter.py` now supports `--adapter_gated` for zero-initialized residual gates in WAN CA blocks;
+- `slurm/scrream_wan_t2v_ablation_pack_train.sbatch` now passes `WAN_ADAPTER_GATED` and `WAN_SEED`;
+- static checks and local dummy forward/backward passed on `2026-05-19`;
+- jobs `86547` / `86548` are standard hidden CA seed-23 repeats for `t249/layer14` and `t499/layer14`;
+- jobs `86549` / `86550` are gated hidden CA seed-17 checks for `t249/layer14` and `t499/layer14`.
+
+Interpretation at submission time: simple hidden-source fusion, FLF2V hidden, and latent tensor choices did not explain the WAN gap. The next useful question was whether the only positive branch, hidden CA-resampling, was stable enough to trust and whether gated residual CA could improve optimization. The completed result above says gated CA was not the answer, while L4 hidden CA is a small positive at `t249/layer14`.
+
+## 2026-05-18 WAN multi-source hidden fusion audit
+
+After the CA-resampler full-grid result, the next question was whether WAN geometry signal is distributed across multiple hidden sources rather than captured by a single timestep/layer. Two narrow fusion checks were added without regenerating caches:
+
+- same timestep, multiple layers: `t249 layers 9+14` and `t249 layers 9+14+19`;
+- same layer, multiple timesteps: `timesteps 249+499+749` at layer `14`.
+
+Implementation:
+
+- `WanHiddenMultiSourceCrossAttentionResamplerAdapter` restores concatenated hidden tokens as `[source, temporal, row, col]`, adds source/temporal/row/column position embeddings, and cross-attends learned NOVA query tokens to all WAN tokens.
+- `train_wan_t2v_nova_adapter.py` accepts `--wan_layers` for multi-layer fusion and `--wan_timesteps` for multi-timestep fusion. Both modes are hidden-cache-only and cannot be combined in the same run.
+- Slurm launchers were added:
+  - `slurm/scrream_wan_t2v_multilayer_pack_train.sbatch`;
+  - `slurm/scrream_wan_t2v_multitime_pack_train.sbatch`.
+- `swanlab.finish()` is now guarded so a network/proxy error during teardown does not fail a completed training run after metrics are already written.
+
+Multi-layer execution:
+
+| job | setting | Slurm state | F@0.10 | pred-to-GT p90 | Chamfer-L2 | note |
+| ---: | --- | --- | ---: | ---: | ---: | --- |
+| `86483` | smoke `t249 layers 9+14` | `COMPLETED 0:0` | n/a | n/a | n/a | wrote loss / robust val / preview artifacts |
+| `86485` | `t249 layers 9+14` | `COMPLETED 0:0` | `0.46487238144059545` | `0.49916083614031476` | `0.12842474008599916` | negative versus single-layer CA |
+| `86487` | `t249 layers 9+14+19` | `FAILED 1:0` | `0.4724058254433277` | `0.449202927450339` | `0.12805132629970709` | training completed; failure was only late `swanlab.finish()` proxy teardown |
+
+Comparison baselines:
+
+| setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 |
+| --- | ---: | ---: | ---: |
+| single-layer CA full-grid `t249/layer14` | `0.48913902331806663` | `0.4372795696059863` | `0.12182091859479745` |
+| single-layer CA full-grid `t249/layer09` | `0.4766100401399189` | `0.410525918006897` | `0.11981592203179996` |
+| multi-layer `t249 layers 9+14` | `0.46487238144059545` | `0.49916083614031476` | `0.12842474008599916` |
+| multi-layer `t249 layers 9+14+19` | `0.4724058254433277` | `0.449202927450339` | `0.12805132629970709` |
+
+Interpretation:
+
+- same-timestep multi-layer fusion did not beat single-layer CA-resampler baselines;
+- `9+14+19` is slightly better than `9+14`, but still below `t249/layer14` on F-score and below `t249/layer09` on p90/Chamfer;
+- stop simple multi-layer hidden fusion unless a later result suggests a more targeted layer combination.
+
+Multi-timestep result, finalized on `2026-05-19`:
+
+- smoke job `86493` completed successfully for `249+499+749/layer14`; the real input shape was `[1,9360,1536]`;
+- formal job `86494` completed with `F@0.10=0.45213117002164466`, `pred-to-GT p90=0.49119475732247037`, and `Chamfer-L2=0.12659800921877226`.
+
+Interpretation: same-layer multi-timestep hidden fusion did not improve over the single-layer CA baselines, so simple hidden-source fusion is stopped for now.
+
+## 2026-05-18 WAN CA-resampler stability and full-grid audit
+
+After the first positive CA-resampler result, the branch was stress-tested with a low-LR rerun and a full `3 x 5` timestep/layer grid.
+
+Completed execution:
+
+- original pending low-LR job `86444` was cancelled because its `128G` memory request blocked scheduling despite available GPU opportunities;
+- replacement low-LR job `86453` ran on `air-node-02`, exit `0:0`, elapsed `01:10:59`, with `WAN_LR=5e-5`, `WAN_VAL_EVERY=250`, `t499/layer14`;
+- full-grid job `86468` ran on `air-node-02`, exit `0:0`, elapsed `06:31:56`, with `WAN_PACK_PARALLEL=3`, `WAN_LR=1e-4`, and `timesteps=249,499,749 x layers=9,14,19,24,29`.
+
+Key comparison:
+
+| setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 |
+| --- | ---: | ---: | ---: |
+| old hidden MLP `t499/layer09` | `0.46988987902779306` | `0.48718947172164917` | `0.21040735269586244` |
+| CA historical peak `t499/layer14` from `86429` | `0.5012956284974035` | `0.4229188362757365` | `0.10908368105689685` |
+| CA low-LR `t499/layer14` from `86453` | `0.4292316005720653` | `0.5338096991181374` | `0.15617707930505276` |
+| CA full-grid `t249/layer14` from `86468` | `0.48913902331806663` | `0.4372795696059863` | `0.12182091859479745` |
+| CA full-grid `t249/layer09` from `86468` | `0.4766100401399189` | `0.410525918006897` | `0.11981592203179996` |
+| clean-GT VGGT layer16 | `0.6860468604251301` | `0.20770130679011345` | `0.026904070439438026` |
+
+Full-grid result:
+
+| timestep | layer09 | layer14 | layer19 | layer24 | layer29 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 249 | `0.47661004` | `0.48913902` | `0.45520595` | `0.44394081` | `0.43922030` |
+| 499 | `0.42516608` | `0.42950700` | `0.42602896` | `0.41505938` | `0.37056562` |
+| 749 | `0.41729879` | `0.45614139` | `0.43892215` | `0.41276225` | `0.38228251` |
+
+Interpretation:
+
+- CA-resampler remains the only clearly positive WAN readout family, but the original `t499/layer14=0.5013` should be treated as a historical peak rather than a stable mean.
+- The low-LR rerun did not stabilize or improve the setting; it is a negative result.
+- The full-grid repeat shifts the most reliable WAN settings toward `t249/layer09/14`. `t249/layer14` is best by F@0.10, while `t249/layer09` is best by p90 and Chamfer.
+- Later layers `24/29` remain weak as single-layer probes.
+- WAN still trails clean-GT VGGT by a large margin, so the next useful work is repeat/visual validation of `t249/layer09`, `t249/layer14`, and historical `t499/layer14`, not another broad single-layer sweep.
+
+## 2026-05-17 WAN learned CA-resampler readout audit
+
+The first generator-preserving learned readout audit completed after the negative pred-x0 and fixed-grid checks.
+
+Implemented adapter:
+
+- `WanHiddenCrossAttentionResamplerAdapter` / `--adapter_type wan_cross_attn_resampler`;
+- valid only for WAN hidden cache (`--wan_feature_kind hidden`);
+- restores hidden cache `[B,3120,1536]` as `[B,2,30,52,1536]`;
+- adds learnable temporal / row / column position embeddings;
+- cross-attends `768` learnable NOVA query tokens to WAN hidden tokens and outputs `[B,768,128]`.
+
+Completed execution:
+
+- smoke job `86427` completed successfully;
+- formal layer09 job `86428` completed on `air-node-02`, exit `0:0`, elapsed `00:54:48`;
+- layer sweep job `86429` completed on `air-node-02`, exit `0:0`, elapsed `02:14:39`, covering `t499 x layers 14,19,24,29`; layer09 is covered by `86428`;
+- user inspected the layer14 `val_visual_40960/step_011500/` previews and reported visual improvement.
+
+Layer sweep results:
+
+| setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 |
+| --- | ---: | ---: | ---: |
+| old hidden MLP `t499/layer09` | `0.46988987902779306` | `0.48718947172164917` | `0.21040735269586244` |
+| CA resampler `t499/layer09` | `0.4675106769755634` | `0.4791356101632118` | `0.1388903713474671` |
+| CA resampler `t499/layer14` | `0.5012956284974035` | `0.4229188362757365` | `0.10908368105689685` |
+| CA resampler `t499/layer19` | `0.45041048278489915` | `0.5866823519269625` | `0.192564707249403` |
+| CA resampler `t499/layer24` | `0.408836804475268` | `0.5937060564756393` | `0.212364894648393` |
+| CA resampler `t499/layer29` | `0.3833416179630764` | `0.5307636285821596` | `0.25971310896178085` |
+
+Interpretation at the time: the WAN path is live and the readout/interface matters. CA-resampler `t499/layer14` improved over old hidden MLP `t499/layer09` by `+0.03140575` F@0.10, `-0.06427064` pred-to-GT p90, and `-0.10132367` Chamfer-L2. The stability/full-grid audit on `2026-05-18` later showed this is a historical peak rather than a stable mean, but it remains the highest WAN metric seen so far.
+
+Follow-up state: low-LR and full-grid reruns are recorded in the `2026-05-18` section above.
+
 ## 2026-05-16 WAN pred-x0 and hidden-grid readout audits
 
 The WAN predicted-x0 / denoised-latent branch moved from cache generation into a readout-specific training audit.
@@ -24,7 +220,7 @@ Hidden-grid readout audits:
 - `WanHiddenGrid2DPoolAdapter` / `--adapter_type grid2d_pool` preserves the hidden cache as `[B,2,30,52,1536]`, maps channels token-wise, then pools to NOVA `[B,2,24,16,128]`; smoke/formal jobs `86423` / `86424` completed on `air-node-04`, with `F@0.10=0.43326753863230877`, `pred_to_gt_p90=0.5651116619507471`, and `Chamfer-L2=0.1759416777640581`;
 - `WanHiddenGrid2DConvAdapter` / `--adapter_type grid2d_conv` adds a small same-resolution 3x3 Conv2d readout before the same 2D pooling; smoke/formal jobs `86425` / `86426` completed on `air-node-04`, with `F@0.10=0.39855373112050535`, `pred_to_gt_p90=0.7689011543989182`, and `Chamfer-L2=1.159957120815913`.
 
-Interpretation: old WAN Route2 `t499/layer09` remains the best WAN setting (`F@0.10=0.46988987902779306`, `pred_to_gt_p90=0.48718947172164917`). Pred-x0 latent, fixed 2D hidden pooling, and tiny fixed 2D conv readout are all negative under the current NOVA/FM generator setup. The next readout/interface branch should be a learned Perceiver / cross-attention resampler from best WAN hidden tokens to NOVA condition tokens.
+Interpretation at the time: old WAN Route2 `t499/layer09` remained the best WAN setting (`F@0.10=0.46988987902779306`, `pred_to_gt_p90=0.48718947172164917`). Pred-x0 latent, fixed 2D hidden pooling, and tiny fixed 2D conv readout were all negative under the current NOVA/FM generator setup. This motivated the learned CA-resampler branch recorded in the `2026-05-17` section above, which later surpassed the old WAN hidden baseline.
 
 ## 2026-05-15 WAN Route2.1 result, normalization / context checks, and pred-x0 queue
 

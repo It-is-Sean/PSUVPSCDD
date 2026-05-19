@@ -1,6 +1,6 @@
 # Experiment plan from the current state
 
-## Current plan override — 2026-05-16
+## Current plan override — 2026-05-19
 
 Older phase labels below remain useful history, but the next valid plan is now:
 
@@ -11,7 +11,7 @@ Older phase labels below remain useful history, but the next valid plan is now:
 5. **Clean-GT VGGT rerun completed.** The previous job `86149` is pre-meta-filter history. Clean-GT job `86286` completed successfully; use VGGT layer `16` as the current default and layer `24` as the main comparison point.
 6. **WAN Route2 completed and is setting-limited.** Keep SCRREAM data, mesh-complete GT, split, MLP adapter, NOVA decoder, and robust validation matched to the clean-GT VGGT ablation; replace only the representation with cached WAN2.1 T2V video-context features. Full feature precompute and 15-run training pack `86307` completed. Best WAN (`t499/layer09`) is above zero/sample-shuffle controls but still far weaker than clean-GT VGGT.
 7. **WAN Route2.1 clean / low-noise, normalization, and pair_tiled81 audits completed.** None of these beat old Route2 best `t499/layer09`; pair_tiled81 improved Chamfer but worsened F-score / pred-to-GT precision. Treat these as evidence that simple noise-level, scale, or context-dilution explanations are insufficient.
-8. **Active WAN direction: keep the NOVA/FM generator and search for generator-compatible WAN representations.** VidFM3D is useful as an extraction/probe reference, but the project goal is not to replace the generator with a dense pointmap probe. Pred-x0 denoised latent with Conv2d readout and fixed hidden-grid readouts completed and did not beat old WAN hidden. The next branch should test a learned Perceiver / cross-attention resampler from best WAN hidden tokens (`ctx81 normal t499/layer09`) to NOVA condition tokens.
+8. **WAN Route2 is paused after the 2026-05-19 audit.** VidFM3D remains useful as an extraction/probe reference, but the project goal is not to replace the NOVA/FM generator with a dense pointmap probe. The learned CA-resampler branch improved WAN and has a historical peak at `t499/layer14` (`F@0.10=0.5012956284974035`), but repeated settings are around `0.49`, L4 hidden CA is only a small positive, and all tested noise/context/latent/fusion/FLF2V/gated variants remain below clean-GT VGGT. Use `wan_summary_2026-05-19.md` as the frozen WAN conclusion. The next active model-coverage task is to select and probe a new backbone under the same clean SCRREAM / NOVA protocol.
 9. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
 10. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
 
@@ -211,7 +211,7 @@ Execution plan:
 5. replacement 15-grid training pack `86307` completed through `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`, exit `0:0`, elapsed `13:36:04`
 6. best WAN Route2 result is `t499/layer09`: `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 7. clean-GT VGGT layer `16` remains much stronger: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-8. next evidence before changing the conclusion: test a learned Perceiver / cross-attention resampler on the best WAN hidden setting
+8. current WAN evidence is frozen in `docs/probe/wan_summary_2026-05-19.md`: learned CA resampler beats old hidden MLP in historical peak and repeated `t249` settings, but simple multi-layer hidden fusion, same-layer multi-timestep fusion, FLF2V hidden, latent tensor-choice readouts, and gated CA did not beat single-layer hidden CA. L4 `t249/layer14` is the only recent small positive, at F@0.10 `0.4919946248489035`.
 
 WAN repo/checkpoint network jobs use proxy `http://127.0.0.1:17890` through the compute-node SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`. The checkpoint, 2-sample feature smoke, window validation, and full cache generation have completed.
 
@@ -249,20 +249,26 @@ Baseline A is already complete and should not be rerun unless an exact reproduci
 | ID | WAN representation | Adapter / decoder | Status | Key result |
 | --- | --- | --- | --- | --- |
 | A | current WAN block hidden, ctx81, normal `t499/layer09` | MLP-L4 -> NOVA/FM | completed | F@0.10 `0.46988987902779306`, pred-to-GT p90 `0.48718947172164917`, Chamfer-L2 `0.21040735269586244` |
-| B | final WAN transformer output / noise-pred-like tensor | MLP-L4 -> NOVA/FM | later tensor-choice audit | tests whether the transformer output endpoint is a better generator condition than block hidden state |
+| B / G | raw T2V transformer `model_output_latent`, ctx81, normal `t499` | Conv2d readout -> NOVA/FM | completed negative | `86536` F@0.10 `0.4199299775478907`, p90 `0.6285491685072581`, Chamfer `0.44791099180777866` |
+| B2 / G2 | raw T2V transformer `model_output_latent`, ctx81, normal `t499` | latent-grid CA resampler -> NOVA/FM | completed negative | `86540` F@0.10 `0.4289946537162989`, p90 `0.5942087918519974`, Chamfer `0.19963246708114943` |
 | C | predicted clean latent / x0 estimate from WAN denoising state | Conv2d readout -> NOVA/FM | completed negative | F@0.10 `0.41336424426176693`, pred-to-GT p90 `0.6272750149170557`, Chamfer-L2 `0.35522504647572833` |
+| C2 | predicted clean latent / x0 estimate from WAN denoising state | latent-grid CA resampler -> NOVA/FM | completed negative | `86543` F@0.10 `0.43766060222664477`, p90 `0.5175856028993925`, Chamfer `0.20880577837427458` |
 | D0 | current block hidden | fixed 2D pool / tiny 2D conv -> NOVA/FM | completed negative | grid2d_pool F@0.10 `0.43326753863230877`; grid2d_conv F@0.10 `0.39855373112050535` |
-| D | current block hidden | learned cross-attention / Perceiver-style resampler -> NOVA/FM | next candidate | tests whether the readout/interface, not the WAN tensor, is the bottleneck |
-| E | multi-layer hidden fusion, e.g. layers `9+19+29` | resampler -> NOVA/FM | follow-up | tests whether single-layer hidden states miss useful low/high-level combinations |
-| F | I2V / FLF2V condition-side WAN features | resampler -> NOVA/FM | follow-up | tests whether WAN's conditioning branch is more suitable than T2V denoising hidden states |
+| D | current block hidden | learned cross-attention / Perceiver-style resampler -> NOVA/FM | positive but unstable | historical `t499/layer14` reaches F@0.10 `0.5012956284974035`; full-grid repeat favors `t249/layer14` / `t249/layer09`; seed/gated/L4 jobs `86547`-`86554` completed, with L4 `t249/layer14` reaching `0.4919946248489035` |
+| E1 | multi-layer hidden fusion, layers `9+14` and `9+14+19` at `t249` | multi-source CA resampler -> NOVA/FM | completed negative | `9+14` F@0.10 `0.46487238144059545`; `9+14+19` F@0.10 `0.4724058254433277`; neither beats single-layer `t249/layer14` |
+| E2 | same-layer multi-timestep hidden fusion, `249+499+749` at layer `14` | multi-source CA resampler -> NOVA/FM | completed negative | formal job `86494` F@0.10 `0.45213117002164466`, below single-layer CA |
+| F | FLF2V first/last-frame hidden, `pair_endpoint81`, `t249/layer14` | CA resampler -> NOVA/FM | completed negative | formal job `86520` F@0.10 `0.42897984457682026`, below T2V CA |
 
-Near-term policy:
+Near-term policy after WAN pause:
 
 1. Treat A as the completed baseline for this branch.
 2. C is complete: `--feature_kind pred_x0_latent` / `--wan_feature_kind pred_x0_latent` produced full cache `86411`; original MLP readout failed on CUDA adaptive-pooling backward; Conv2d readout smoke `86421` and formal job `86422` completed, but the result did not beat A.
 3. D0 is complete: fixed 2D hidden pooling and tiny 2D conv did not beat A.
-4. Run D next before spending more time on broad MLP capacity sweeps.
-5. Keep I2V/FLF2V as the higher-cost branch after the T2V tensor/readout audit.
+4. D is complete for the first `t499` sweep, low-LR rerun, and full `249/499/749 x 9/14/19/24/29` grid.
+5. E1 and E2 are complete and negative, so stop simple hidden fusion for now.
+6. F is complete and negative for hidden tokens; do not expand FLF2V hidden broadly unless later tensor-choice evidence motivates it.
+7. Stop B/G and C2 for now: model-output and pred-x0 latent learned-readout results are below hidden CA.
+8. Pause D as the main line. Optional appendix-only checks are L4 `t249/layer09` and one L4 `t249/layer14` seed repeat. The active work should move to the next backbone, starting with cache shape sanity, zero/shuffle control, one-step training smoke, and a small layer/readout pilot.
 
 ## Phase 7 — Proposal-facing interpretation
 
