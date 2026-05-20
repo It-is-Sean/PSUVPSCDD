@@ -65,6 +65,7 @@ MODE_CTX_SHUFFLE16 = "ctx_shuffle16"
 MODE_CTX_ANCHOR32 = "ctx_anchor32"
 MODE_CTX_ANCHOR64 = "ctx_anchor64"
 MODE_CTX_CONTIG81 = "ctx_contig81"
+MODE_CTX_CONTIG82 = "ctx_contig82"
 MODE_CTX_F0F1_SPAN = "ctx_f0f1_span"
 MODE_CTX_WAN16 = "ctx_wan16"
 MODE_CTX_WAN64 = "ctx_wan64"
@@ -75,6 +76,7 @@ WINDOW_MODES = (
     MODE_CTX_ANCHOR32,
     MODE_CTX_ANCHOR64,
     MODE_CTX_CONTIG81,
+    MODE_CTX_CONTIG82,
     MODE_CTX_F0F1_SPAN,
     MODE_CTX_WAN16,
     MODE_CTX_WAN64,
@@ -189,24 +191,29 @@ def _find_anchor_positions(raw_indices: list[int], frame_ids: tuple[int, int]) -
     return int(f0_pos), int(f1_pos)
 
 
-def _build_ctx81_indices(spec: WindowSpec) -> list[int]:
+def _build_contiguous_window_indices(spec: WindowSpec, window_size: int) -> list[int]:
     rgb_map = load_rgb_paths(Path(spec.sequence_dir))
     min_frame = min(rgb_map)
     max_frame = max(rgb_map)
-    if max_frame - min_frame + 1 < 81:
-        raise ValueError(f"Sequence {spec.sequence_dir} has fewer than 81 numbered frames")
+    if max_frame - min_frame + 1 < int(window_size):
+        raise ValueError(f"Sequence {spec.sequence_dir} has fewer than {window_size} numbered frames")
     mid = (spec.frame_ids[0] + spec.frame_ids[1]) // 2
-    start = mid - 40
-    start = max(min_frame, min(start, max_frame - 80))
-    end = start + 80
+    half = int(window_size) // 2
+    start = mid - half
+    start = max(min_frame, min(start, max_frame - int(window_size) + 1))
+    end = start + int(window_size) - 1
     if not (start <= spec.frame_ids[0] <= end and start <= spec.frame_ids[1] <= end):
         raise ValueError(
-            f"Pair {spec.frame_ids} cannot fit in 81-frame window [{start}, {end}] for {spec.sequence_dir}"
+            f"Pair {spec.frame_ids} cannot fit in {window_size}-frame window [{start}, {end}] for {spec.sequence_dir}"
         )
     missing = [idx for idx in range(start, end + 1) if idx not in rgb_map]
     if missing:
         raise FileNotFoundError(f"Missing RGB frames in {spec.sequence_dir}: first missing ids {missing[:8]}")
     return list(range(start, end + 1))
+
+
+def _build_ctx81_indices(spec: WindowSpec) -> list[int]:
+    return _build_contiguous_window_indices(spec, window_size=81)
 
 
 def _sample_ctx81_to_wan16(raw81_indices: list[int], frame_ids: tuple[int, int]) -> list[int]:
@@ -295,9 +302,13 @@ def build_clip_from_window(spec: WindowSpec, clip_mode: str, shuffle_seed: int) 
         window_paths_raw = clip_paths[:]
         window_size_raw = len(window_paths_raw)
         pair_temporal_indices_raw = [int(anchor_positions[0]), int(anchor_positions[1])]
-    elif clip_mode in {MODE_CTX_WAN16, MODE_CTX_WAN64, MODE_CTX_CONTIG81}:
+    elif clip_mode in {MODE_CTX_WAN16, MODE_CTX_WAN64, MODE_CTX_CONTIG81, MODE_CTX_CONTIG82}:
         rgb_map = load_rgb_paths(Path(spec.sequence_dir))
-        raw81_indices = _build_ctx81_indices(spec)
+        raw81_indices = (
+            _build_contiguous_window_indices(spec, window_size=82)
+            if clip_mode == MODE_CTX_CONTIG82
+            else _build_ctx81_indices(spec)
+        )
         if clip_mode == MODE_CTX_WAN16:
             raw_indices = _sample_ctx81_to_wan16(raw81_indices, spec.frame_ids)
         elif clip_mode == MODE_CTX_WAN64:
@@ -482,6 +493,8 @@ def main() -> None:
         num_frames = 64
     elif args.window_mode == MODE_CTX_CONTIG81:
         num_frames = 81
+    elif args.window_mode == MODE_CTX_CONTIG82:
+        num_frames = 82
     elif args.window_mode == MODE_CTX_F0F1_SPAN:
         num_frames = 81
     elif args.window_mode == MODE_CTX_WAN64:
