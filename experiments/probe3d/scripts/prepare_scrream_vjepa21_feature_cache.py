@@ -372,11 +372,19 @@ def load_vjepa21_encoder(model_name: str, checkpoint_path: str, num_frames: int,
         raise ValueError(f"Unsupported V-JEPA 2.1 model_name={model_name!r}")
     encoder, _ = builders[model_name](pretrained=False, num_frames=int(num_frames))
     payload = torch.load(checkpoint_path, map_location="cpu")
-    if "ema_encoder" not in payload:
-        raise KeyError(f"Checkpoint {checkpoint_path} does not contain ema_encoder")
-    state_dict = _clean_backbone_key(dict(payload["ema_encoder"]))
+    encoder_key = None
+    for key in ("ema_encoder", "target_encoder", "encoder"):
+        if key in payload:
+            encoder_key = key
+            break
+    if encoder_key is None:
+        raise KeyError(
+            f"Checkpoint {checkpoint_path} does not contain any supported encoder key; "
+            f"found keys={sorted(payload.keys())[:20]}"
+        )
+    state_dict = _clean_backbone_key(dict(payload[encoder_key]))
     msg = encoder.load_state_dict(state_dict, strict=True)
-    logging.info("Loaded %s from %s with msg=%s", model_name, checkpoint_path, msg)
+    logging.info("Loaded %s from %s using key=%s with msg=%s", model_name, checkpoint_path, encoder_key, msg)
     encoder = encoder.to(device).eval()
     encoder.return_hierarchical = False
     for param in encoder.parameters():
