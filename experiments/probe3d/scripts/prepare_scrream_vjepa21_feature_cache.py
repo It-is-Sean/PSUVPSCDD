@@ -422,10 +422,11 @@ def encode_clip(
             f"Token shape mismatch: expected {expected_tokens} = {t_tokens}*{h_tokens}*{w_tokens}, got {num_tokens}"
         )
     grid = tokens.reshape(1, t_tokens, h_tokens, w_tokens, dim)
+    max_token_index = t_tokens - 1
     pair_token_indices = sorted(
         {
-            int(pair_temporal_indices_resampled[0]) // int(tubelet_size),
-            int(pair_temporal_indices_resampled[1]) // int(tubelet_size),
+            min(max_token_index, int(pair_temporal_indices_resampled[0]) // int(tubelet_size)),
+            min(max_token_index, int(pair_temporal_indices_resampled[1]) // int(tubelet_size)),
         }
     )
     selected = grid[:, pair_token_indices].reshape(1, len(pair_token_indices) * h_tokens * w_tokens, dim)
