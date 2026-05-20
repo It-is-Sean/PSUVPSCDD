@@ -496,13 +496,20 @@ def main() -> None:
     elif args.window_mode == MODE_CTX_CONTIG82:
         num_frames = 82
     elif args.window_mode == MODE_CTX_F0F1_SPAN:
-        num_frames = 81
+        num_frames = None
     elif args.window_mode == MODE_CTX_WAN64:
         num_frames = 64
     else:
         num_frames = 16
     device = torch.device(args.device if torch.cuda.is_available() or args.device == "cpu" else "cpu")
-    encoder = load_vjepa21_encoder(args.model_name, args.checkpoint_path, num_frames=num_frames, device=device)
+    encoder_cache: dict[int, Any] = {}
+    if num_frames is not None:
+        encoder_cache[int(num_frames)] = load_vjepa21_encoder(
+            args.model_name,
+            args.checkpoint_path,
+            num_frames=int(num_frames),
+            device=device,
+        )
     cache_root = Path(args.output_dir)
 
     for item_idx, sample_idx in enumerate(selected_indices):
@@ -515,6 +522,16 @@ def main() -> None:
         )
         frames = load_frames(clip_paths)
         clip_tensor = preprocess_frames(frames, crop_size=int(args.crop_size)).to(device)
+        current_num_frames = int(clip_meta["resampled_num_frames"]) if num_frames is None else int(num_frames)
+        encoder = encoder_cache.get(current_num_frames)
+        if encoder is None:
+            encoder = load_vjepa21_encoder(
+                args.model_name,
+                args.checkpoint_path,
+                num_frames=current_num_frames,
+                device=device,
+            )
+            encoder_cache[current_num_frames] = encoder
         features, feature_meta = encode_clip(
             encoder,
             clip_tensor,
@@ -542,7 +559,7 @@ def main() -> None:
             "tubelet_size": int(args.tubelet_size),
             "crop_size": int(args.crop_size),
             "patch_size": int(args.patch_size),
-            "num_frames": int(num_frames),
+            "num_frames": int(current_num_frames),
             **feature_meta,
         }
         out_path = cache_path(cache_root, args.window_mode, spec.sample_id)
