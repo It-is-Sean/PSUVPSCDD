@@ -74,6 +74,12 @@ from train_vggt_nova_adapter import (
 )
 
 
+def append_jsonl(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
 def safe_cache_sample_id(sample_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "__", str(sample_id)).strip("_")
 
@@ -301,6 +307,8 @@ def main():
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         log_path = output_dir / "training.log"
+        train_history_path = output_dir / "train_history.jsonl"
+        val_history_path = output_dir / "validation_history.jsonl"
 
         decoder, meta, cfg = build_decoder(device, args.nova_ckpt)
         meta = dict(meta)
@@ -468,8 +476,14 @@ def main():
             if final_loss < best_loss:
                 best_loss = final_loss
             if is_main and (global_step % 10 == 0 or global_step == 1 or args.debug_one_batch):
+                train_payload = {
+                    "step": int(global_step),
+                    "loss": float(final_loss),
+                    "best_loss": float(best_loss),
+                }
                 with log_path.open("a", encoding="utf-8") as log:
                     log.write(f"step={global_step} loss={final_loss:.8f} best={best_loss:.8f}\n")
+                append_jsonl(train_history_path, train_payload)
                 if wandb_run is not None:
                     wandb_run.log({"train/loss": final_loss, "train/best_loss": best_loss}, step=global_step)
                 if swanlab_run:
@@ -507,6 +521,7 @@ def main():
                         elif key in QUALITY_METRIC_KEYS:
                             validation_payload[f"val_{key}"] = float(value)
                     save_json(output_dir / "validation_metrics.json", validation_payload)
+                    append_jsonl(val_history_path, validation_payload)
                     if args.val_preview_samples > 0:
                         preview_root = resolve_val_preview_root(args, output_dir)
                         save_json(preview_root / "latest_index.json", {"step": global_step, "preview_root": str(preview_root), "records": val_metrics.get("preview_records", [])})
