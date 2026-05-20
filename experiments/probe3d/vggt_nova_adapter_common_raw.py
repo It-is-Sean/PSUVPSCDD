@@ -409,6 +409,47 @@ def build_decoder(device: torch.device, ckpt_path: str | Path | None = DEFAULT_N
     return decoder, meta, cfg
 
 
+VGGT_OMEGA_IMAGE_PREPROC_CHOICES = ("default", "aspect_pad_square")
+
+
+def _aspect_pad_square_preprocess(paths, target_resolution: int, fill_value: float = 1.0) -> torch.Tensor:
+    """Aspect-preserving longest-side resize + center pad to a square canvas.
+
+    Returns a [N, 3, target_resolution, target_resolution] float tensor in [0, 1].
+    Designed for VGGT-Omega so the input grid is exactly target_resolution-aligned
+    (use a multiple of the Omega patch size, e.g. 512 for the 16x16 patch_embed).
+
+    This is a controlled-preprocess option for the 2026-05-20 Omega audit, so the
+    same backbone can be probed with either its native loader or this explicit
+    aspect-pad path. It does not invoke the third_party vggt-omega loader.
+    """
+    from PIL import Image as _Image
+
+    if target_resolution <= 0:
+        raise ValueError(f"target_resolution must be positive, got {target_resolution}")
+    fill_byte = max(0, min(255, int(round(float(fill_value) * 255.0))))
+    tensors = []
+    for path in paths:
+        img = _Image.open(path).convert("RGB")
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            raise ValueError(f"Image {path} has invalid size {(w, h)}")
+        if w >= h:
+            new_w = int(target_resolution)
+            new_h = max(1, int(round(h * target_resolution / w)))
+        else:
+            new_h = int(target_resolution)
+            new_w = max(1, int(round(w * target_resolution / h)))
+        resized = img.resize((new_w, new_h), _Image.BILINEAR)
+        canvas = _Image.new("RGB", (int(target_resolution), int(target_resolution)), color=(fill_byte, fill_byte, fill_byte))
+        offset_x = (int(target_resolution) - new_w) // 2
+        offset_y = (int(target_resolution) - new_h) // 2
+        canvas.paste(resized, (offset_x, offset_y))
+        arr = np.asarray(canvas, dtype=np.float32) / 255.0
+        tensors.append(torch.from_numpy(arr).permute(2, 0, 1).contiguous())
+    return torch.stack(tensors, dim=0)
+
+
 class AdapterImagePointDataset(Dataset):
     def __init__(
         self,
@@ -418,6 +459,7 @@ class AdapterImagePointDataset(Dataset):
         image_root_map: tuple[str, str] | None = None,
         image_loader: str = "vggt",
         image_resolution: int = 512,
+        vggt_omega_image_preproc: str = "default",
     ) -> None:
         add_repo_paths()
         self.path = Path(path)
@@ -429,6 +471,12 @@ class AdapterImagePointDataset(Dataset):
         self.image_root_map = image_root_map
         self.image_loader = image_loader
         self.image_resolution = int(image_resolution)
+        self.vggt_omega_image_preproc = str(vggt_omega_image_preproc)
+        if self.vggt_omega_image_preproc not in VGGT_OMEGA_IMAGE_PREPROC_CHOICES:
+            raise ValueError(
+                f"Unsupported vggt_omega_image_preproc={self.vggt_omega_image_preproc!r}; "
+                f"choices: {VGGT_OMEGA_IMAGE_PREPROC_CHOICES}"
+            )
         if self.image_loader not in {"vggt", "vggt_omega"}:
             raise ValueError(f"Unsupported image_loader={self.image_loader!r}")
         self.indices = list(range(len(self.scene_ids)))
@@ -464,6 +512,18 @@ class AdapterImagePointDataset(Dataset):
         )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
+        if self.image_loader == "vggt_omega" and self.vggt_omega_image_preproc == "aspect_pad_square":
+            src_idx = self.indices[idx]
+            paths = self._resolve_frame_paths(self.metadata[src_idx])
+            images = _aspect_pad_square_preprocess(paths, target_resolution=self.image_resolution)
+            return {
+                "images": images,
+                "target_points": self.targets[src_idx],
+                "scene_id": self.scene_ids[src_idx],
+                "split": self.splits[src_idx],
+                "frame_paths": paths,
+            }
+
         if self.image_loader == "vggt_omega":
             add_repo_paths(extra_paths=[DEFAULT_VGGT_OMEGA_REPO])
             from vggt_omega.utils.load_fn import load_and_preprocess_images
@@ -615,6 +675,7 @@ def build_loader(
     scannet_max_interval: int = 1,
     image_loader: str = "vggt",
     image_resolution: int = 512,
+    vggt_omega_image_preproc: str = "default",
 ):
     del cfg
     if dataset_name == "scannet":
@@ -647,6 +708,7 @@ def build_loader(
             image_root_map=image_root_map,
             image_loader=image_loader,
             image_resolution=image_resolution,
+            vggt_omega_image_preproc=vggt_omega_image_preproc,
         )
     except ValueError:
         dataset = AdapterImagePointDataset(
@@ -655,6 +717,7 @@ def build_loader(
             image_root_map=image_root_map,
             image_loader=image_loader,
             image_resolution=image_resolution,
+            vggt_omega_image_preproc=vggt_omega_image_preproc,
         )
     sampler = None
     if distributed:

@@ -166,6 +166,12 @@ def parse_args():
     parser.add_argument("--vggt_weights", default=None, help="Optional local VGGT-1B model.pt path; avoids network fallback on Slurm nodes.")
     parser.add_argument("--vggt_omega_weights", default=None, help="Optional local VGGT-Omega model.pt path; required for --backbone vggt_omega on Slurm nodes.")
     parser.add_argument("--vggt_omega_image_resolution", type=int, default=512, help="Image resolution passed to VGGT-Omega preprocessing.")
+    parser.add_argument(
+        "--vggt_omega_image_preproc",
+        default="default",
+        choices=("default", "aspect_pad_square"),
+        help="VGGT-Omega image preprocess. 'default' uses third_party/vggt-omega's load_and_preprocess_images. 'aspect_pad_square' uses a local aspect-preserving longest-side resize + center pad to a square canvas, ignoring the Omega-default preprocess. Direction 2 of the 2026-05-20 Omega audit.",
+    )
     parser.add_argument("--vggt_layer", type=int, default=23, help="VGGT human layer to use as frozen representation. 0 means DINO patch tokens before VGGT alternating attention; 1-24 mean VGGT aggregator layers.")
     parser.add_argument("--vggt_token_mode", default="full", choices=("full", "registers"), help="Token subset passed to the adapter. 'registers' selects VGGT-Omega Frozen Scene Tokens only.")
     parser.add_argument("--dataset", default="scrream_adapter", choices=("scrream_adapter", "scannet"))
@@ -784,6 +790,7 @@ def main():
             scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
             image_loader=args.backbone,
             image_resolution=args.vggt_omega_image_resolution,
+            vggt_omega_image_preproc=args.vggt_omega_image_preproc,
         )
         val_loader = None
         test_loader = None
@@ -797,6 +804,7 @@ def main():
                 scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
                 image_loader=args.backbone,
                 image_resolution=args.vggt_omega_image_resolution,
+                vggt_omega_image_preproc=args.vggt_omega_image_preproc,
             )
             if args.final_test:
                 test_loader, _ = build_loader(
@@ -808,6 +816,7 @@ def main():
                     scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
                     image_loader=args.backbone,
                     image_resolution=args.vggt_omega_image_resolution,
+                    vggt_omega_image_preproc=args.vggt_omega_image_preproc,
                 )
         vggt = load_visual_backbone(
             device,
@@ -925,6 +934,7 @@ def main():
                 "vggt_weights": str(args.vggt_weights) if args.vggt_weights else None,
                 "vggt_omega_weights": str(args.vggt_omega_weights) if args.vggt_omega_weights else None,
                 "vggt_omega_image_resolution": args.vggt_omega_image_resolution,
+                "vggt_omega_image_preproc": args.vggt_omega_image_preproc,
                 "dataset": {"data_root": data_args.data_root, "test_dataset_name": data_args.test_dataset_name},
                 "image_root_map": args.image_root_map,
             }
