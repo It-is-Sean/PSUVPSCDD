@@ -409,6 +409,18 @@ def preprocess_frames(frames: list[Image.Image], crop_size: int) -> torch.Tensor
     return clip.unsqueeze(0)
 
 
+def frame_index_to_temporal_token_index(frame_index: int, clip_num_frames: int, tubelet_size: int) -> int:
+    if frame_index < 0 or frame_index >= int(clip_num_frames):
+        raise ValueError(f"frame_index={frame_index} is outside clip_num_frames={clip_num_frames}")
+    t_tokens = int(clip_num_frames) // int(tubelet_size)
+    if t_tokens < 1:
+        raise ValueError(f"clip_num_frames={clip_num_frames} with tubelet_size={tubelet_size} yields no temporal tokens")
+    # PatchEmbed3D uses non-overlapping tubelets with stride=tubelet_size. For odd lengths,
+    # the final raw frame has no dedicated token, so map it to the last valid token.
+    token_index = int(frame_index) // int(tubelet_size)
+    return min(t_tokens - 1, token_index)
+
+
 def encode_clip(
     encoder,
     clip_tensor: torch.Tensor,
@@ -433,17 +445,28 @@ def encode_clip(
             f"Token shape mismatch: expected {expected_tokens} = {t_tokens}*{h_tokens}*{w_tokens}, got {num_tokens}"
         )
     grid = tokens.reshape(1, t_tokens, h_tokens, w_tokens, dim)
-    max_token_index = t_tokens - 1
     pair_token_indices = sorted(
         {
-            min(max_token_index, int(pair_temporal_indices_resampled[0]) // int(tubelet_size)),
-            min(max_token_index, int(pair_temporal_indices_resampled[1]) // int(tubelet_size)),
+            frame_index_to_temporal_token_index(
+                int(pair_temporal_indices_resampled[0]),
+                clip_num_frames=int(clip_tensor.shape[2]),
+                tubelet_size=int(tubelet_size),
+            ),
+            frame_index_to_temporal_token_index(
+                int(pair_temporal_indices_resampled[1]),
+                clip_num_frames=int(clip_tensor.shape[2]),
+                tubelet_size=int(tubelet_size),
+            ),
         }
     )
     selected = grid[:, pair_token_indices].reshape(1, len(pair_token_indices) * h_tokens * w_tokens, dim)
     meta = {
         "full_encoder_token_shape": [int(t_tokens), int(h_tokens), int(w_tokens), int(dim)],
         "selected_temporal_token_indices": [int(x) for x in pair_token_indices],
+        "selected_temporal_token_frame_ranges": [
+            [int(idx * int(tubelet_size)), int(min(int(clip_tensor.shape[2]) - 1, idx * int(tubelet_size) + int(tubelet_size) - 1))]
+            for idx in pair_token_indices
+        ],
         "selected_feature_shape": list(selected.shape[1:]),
     }
     return selected.squeeze(0).detach().cpu().to(torch.float16), meta
