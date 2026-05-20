@@ -578,7 +578,7 @@ def main() -> None:
         "window_mode": args.window_mode,
         "model_name": args.model_name,
         "checkpoint_path": str(args.checkpoint_path),
-        "num_frames": int(num_frames),
+        "num_frames": None if num_frames is None else int(num_frames),
         "tubelet_size": int(args.tubelet_size),
         "patch_size": int(args.patch_size),
         "crop_size": int(args.crop_size),
