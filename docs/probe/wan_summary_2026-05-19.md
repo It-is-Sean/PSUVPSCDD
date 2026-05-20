@@ -20,7 +20,8 @@ The main T2V hidden cache uses 81-frame video context around each SCRREAM pair a
 
 | branch | representative setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 | conclusion |
 | --- | --- | ---: | ---: | ---: | --- |
-| Clean-GT VGGT reference | VGGT layer16 | `0.6860468604251301` | `0.20770130679011345` | `0.026904070439438026` | much stronger than WAN |
+| Current clean-GT VGGT1 reference | VGGT1 MLP layer16 50ep | `0.702544731989172` | `0.19675995161135992` | `0.027118226668486994` | current main baseline, much stronger than WAN |
+| Historical clean-GT VGGT reference | VGGT layer16, 9510 steps | `0.6860468604251301` | `0.20770130679011345` | `0.026904070439438026` | older comparison, superseded by 50ep |
 | Old WAN hidden MLP | T2V `ctx81 t499/layer09` | `0.46988987902779306` | `0.48718947172164917` | `0.21040735269586244` | live baseline above controls |
 | Hidden CA historical peak | T2V `ctx81 t499/layer14` | `0.5012956284974035` | `0.4229188362757365` | `0.10908368105689685` | best WAN metric observed |
 | Hidden CA repeated F baseline | T2V `ctx81 t249/layer14` | `0.48913902331806663` | `0.4372795696059863` | `0.12182091859479745` | strongest repeated F setting |
@@ -49,7 +50,7 @@ WAN should be reported as a setting-sensitive but informative probe:
 
 - WAN T2V hidden states contain usable spatial signal: real features beat zero/sample-shuffle controls, and learned CA readout improves over the MLP hidden baseline.
 - The WAN-to-NOVA interface is the main positive lesson. `wan_cross_attn_resampler` is the only readout family that consistently made WAN competitive with the old hidden baseline.
-- WAN still trails clean-GT VGGT by a large margin under the same SCRREAM / NOVA decoder protocol. The best WAN historical F@0.10 is about `0.50`; repeated settings are around `0.49`; VGGT layer16 is `0.6860`.
+- WAN still trails clean-GT VGGT1 by a large margin under the same SCRREAM / NOVA decoder protocol. The best WAN historical F@0.10 is about `0.50`; repeated settings are around `0.49`; VGGT1 MLP layer16 50ep is `0.7025`.
 - Simple explanations were ruled out: diffusion noise level, token normalization, context dilution, latent tensor choice, simple grid pooling, simple hidden fusion, FLF2V hidden, and gated residual CA did not close the gap.
 - The `t499/layer14` CA result should be treated as a historical peak, not a stable mean. `t249/layer09` and `t249/layer14` are the safer repeated comparison anchors.
 

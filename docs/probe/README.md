@@ -1,6 +1,6 @@
 # Probe Docs
 
-## Current canonical status — 2026-05-19
+## Current canonical status — 2026-05-20
 
 For the latest project state, read:
 
@@ -16,12 +16,13 @@ Key corrections:
 - The current MLP baseline is mostly a failure-mode baseline: recall is moderate, precision/sharpness are poor.
 - The old local `eval_scrream` branch is invalid for claims, but full SCRREAM is now downloaded at `~/datasets/SCRREAM`.
 - The active baseline branch is SCRREAM full-data mesh-complete VGGT adapter training on sequence-meta-filtered clean GT.
-- The WAN2.1 T2V Route2 branch is paused after the `2026-05-19` audit; use `wan_summary_2026-05-19.md` as the final evidence trail. WAN kept the VGGT ablation's data/GT/split/decoder/validation fixed and changed only the representation/readout. The learned hidden CA resampler was the only clearly positive WAN hidden readout: historical best `t499/layer14` reached `F@0.10=0.5012956284974035`, `pred_to_gt_p90=0.4229188362757365`, and `Chamfer=0.10908368105689685`; repeated settings are closer to `0.49`, and L4 `t249/layer14` reached `0.4919946248489035`. WAN is still below clean-GT VGGT layer `16`, so the next active model-coverage work should move to a new backbone rather than another broad WAN sweep.
+- The WAN2.1 T2V Route2 branch is paused after the `2026-05-19` audit; use `wan_summary_2026-05-19.md` as the final evidence trail. WAN kept the VGGT ablation's data/GT/split/decoder/validation fixed and changed only the representation/readout. The learned hidden CA resampler was the only clearly positive WAN hidden readout: historical best `t499/layer14` reached `F@0.10=0.5012956284974035`, `pred_to_gt_p90=0.4229188362757365`, and `Chamfer=0.10908368105689685`; repeated settings are closer to `0.49`, and L4 `t249/layer14` reached `0.4919946248489035`. WAN is still far below VGGT1 MLP layer16 50ep (`F@0.10=0.702544731989172`), so the active model-coverage work moved to VGGT-Omega rather than another broad WAN sweep.
+- VGGT-Omega is wired through `third_party/vggt-omega` and `train_vggt_nova_adapter.py --backbone vggt_omega`. Dense/full-token MLP, dense/full-token CA, and register-only / "Frozen Scene Tokens" CA all completed for layers `12,16,20,24` using `checkpoints/vggt_omega/vggt_omega_1b_512.pt`. Best Omega is dense CA layer16 (`F@0.10=0.6576072630447046`), below VGGT1 MLP layer16 (`0.702544731989172`) and VGGT1 CA layer20 (`0.7014525243138799`). This is now a probe-validity warning: the next step is a decoder-free SCRREAM direct spatial readout to test whether NOVA/FM generator compatibility is confounding cross-backbone representation ranking.
 - Long data generation and training should use `slurm/` scripts with logs in `slurm_out/`.
 - Slurm job `86140` completed the 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; `final_metrics.json` reports `best_val_chamfer_l2=0.5149603486061096`.
-- Slurm job `86149` completed the robust VGGT layer ablation on `2026-05-08`, but it used the pre-meta-filter GT and is now historical. Clean-GT VGGT ablation job `86286` completed successfully; the current default is layer `16`, with layer `24` as the main comparison point.
+- Slurm job `86149` completed the robust VGGT layer ablation on `2026-05-08`, but it used the pre-meta-filter GT and is now historical. Clean-GT VGGT ablation job `86286` completed successfully and is now the 9510-step historical baseline; the current default is VGGT1 MLP layer16 50ep from job `86571`.
 - NOVA `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; SwanLab is installed in `nova3r`.
-- VGGT, Wan2.1, and VidFM3D are Git submodules under `third_party/`; initialize them with `git submodule update --init --recursive`.
+- VGGT, VGGT-Omega, Wan2.1, and VidFM3D are Git submodules under `third_party/`; initialize them with `git submodule update --init --recursive`.
 - WAN Route2 uses proxy `http://127.0.0.1:17890` through compute-node SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`; non-WAN jobs keep the `7896` proxy default.
 
 This folder records the proposal-facing execution state for the current adapter / decoder experiments.
@@ -39,9 +40,9 @@ It is:
 
 Full `.pt` generation is complete for both 10k and 20k target variants. The current formal data file is `scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt`, which has `train=317`, `val=12`, and `mesh_sequence_meta_filter=True`. The previous 20k / 500k MLP baseline and VGGT layer ablation were run before the sequence-level object filter; use them as historical diagnostics, not final clean-GT claims.
 
-The clean-GT VGGT layer ablation completed as Slurm job `86286`. The current default VGGT layer is `16` (`best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`); layer `24` is the closest comparison point.
+The clean-GT VGGT layer ablation completed as Slurm job `86286` and is now historical. The current default VGGT1 baseline is MLP layer `16` 50ep from job `86571` (`best_val_fscore_tau_0.10=0.702544731989172`, `best_val_pred_to_gt_p90=0.19675995161135992`); CA layer `20` 50ep from job `86572` is the closest readout comparison (`F@0.10=0.7014525243138799`).
 
-WAN is no longer the active follow-up. The branch remains implemented and documented, but broad expansion is paused. Optional future WAN appendix checks are limited to L4 hidden CA around `t249/layer09/14`; the main next step is selecting and probing the next backbone under the same clean SCRREAM / NOVA protocol.
+WAN is no longer the active follow-up. The branch remains implemented and documented, but broad expansion is paused. Optional future WAN appendix checks are limited to L4 hidden CA around `t249/layer09/14`. The current non-WAN follow-up is no longer another Omega sweep; it is a validity audit of whether the NOVA/FM decoder probe measures transferable spatial representation quality or mainly compatibility with its condition-token interface.
 
 WAN Route2 entrypoints:
 
@@ -57,7 +58,8 @@ Route2 result:
 - old best WAN hidden baseline: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - historical best WAN interface: `t499/layer14 + wan_cross_attn_resampler`, `best_val_fscore_tau_0.10=0.5012956284974035`, `best_val_pred_to_gt_p90=0.4229188362757365`, `best_val_chamfer_l2=0.10908368105689685`; layer sweep F@0.10 was layer09 `0.46751068`, layer14 `0.50129563`, layer19 `0.45041048`, layer24 `0.40883680`, layer29 `0.38334162`
 - CA-resampler repeat/full-grid checks: `86453` low-LR `t499/layer14` was negative (`F@0.10=0.4292316005720653`); `86468` full grid completed with best repeated F at `t249/layer14` (`0.48913902331806663`) and best repeated p90 / Chamfer at `t249/layer09` (`0.410525918006897` / `0.11981592203179996`)
-- clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+- current VGGT1 MLP layer `16` 50ep: `best_val_fscore_tau_0.10=0.702544731989172`, `best_val_pred_to_gt_p90=0.19675995161135992`, `best_val_chamfer_l2=0.027118226668486994`
+- historical clean-GT VGGT layer `16` from job `86286`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
 - Route2.1 result: layers `9,14,29` with `no_noise` and `low_noise` completed through `86342/86343 -> 86350/86351 -> 86357 -> 86371/86372`; best clean/low-noise run did not beat old Route2 `t499/layer09`
 - normalization follow-up: `t499/layer09 + token_layernorm` completed as job `86395`; it did not beat old Route2 best (`F@0.10=0.45476213575933216`)
 - pair-context follow-up: `pair_tiled81` completed as jobs `86396 -> 86397 -> 86400 -> 86401`; it did not beat old Route2 best (`F@0.10=0.4429200036613287`)

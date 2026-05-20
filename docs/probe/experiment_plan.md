@@ -8,12 +8,13 @@ Older phase labels below remain useful history, but the next valid plan is now:
 2. **Use sequence-filtered mesh-complete SCRREAM targets first.** The current default GT source reads the current sequence `meta.txt`, samples only the listed registered scene meshes proportional to surface area, crops to the selected two-view union frustum, and stores targets in the first input camera frame.
 3. **Launch through Slurm.** Data generation and training scripts live in `slurm/`; logs go to `slurm_out/`.
 4. **Clean GT regeneration completed.** Slurm jobs `86283` and `86284` regenerated the 20k / 500k `trainplus_test` adapter data with `mesh_sequence_meta_filter=True`.
-5. **Clean-GT VGGT rerun completed.** The previous job `86149` is pre-meta-filter history. Clean-GT job `86286` completed successfully; use VGGT layer `16` as the current default and layer `24` as the main comparison point.
+5. **Clean-GT VGGT reruns completed.** The previous job `86149` is pre-meta-filter history. Clean-GT job `86286` completed successfully and is now the 9510-step historical baseline. VGGT1 50ep jobs `86571` / `86572` completed; use VGGT1 MLP layer `16` 50ep as the current default and VGGT1 CA layer `20` 50ep as the main readout comparison.
 6. **WAN Route2 completed and is setting-limited.** Keep SCRREAM data, mesh-complete GT, split, MLP adapter, NOVA decoder, and robust validation matched to the clean-GT VGGT ablation; replace only the representation with cached WAN2.1 T2V video-context features. Full feature precompute and 15-run training pack `86307` completed. Best WAN (`t499/layer09`) is above zero/sample-shuffle controls but still far weaker than clean-GT VGGT.
 7. **WAN Route2.1 clean / low-noise, normalization, and pair_tiled81 audits completed.** None of these beat old Route2 best `t499/layer09`; pair_tiled81 improved Chamfer but worsened F-score / pred-to-GT precision. Treat these as evidence that simple noise-level, scale, or context-dilution explanations are insufficient.
-8. **WAN Route2 is paused after the 2026-05-19 audit.** VidFM3D remains useful as an extraction/probe reference, but the project goal is not to replace the NOVA/FM generator with a dense pointmap probe. The learned CA-resampler branch improved WAN and has a historical peak at `t499/layer14` (`F@0.10=0.5012956284974035`), but repeated settings are around `0.49`, L4 hidden CA is only a small positive, and all tested noise/context/latent/fusion/FLF2V/gated variants remain below clean-GT VGGT. Use `wan_summary_2026-05-19.md` as the frozen WAN conclusion. The next active model-coverage task is to select and probe a new backbone under the same clean SCRREAM / NOVA protocol.
-9. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
-10. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
+8. **WAN Route2 is paused after the 2026-05-19 audit.** VidFM3D remains useful as an extraction/probe reference, but the project goal is not to replace the NOVA/FM generator with a dense pointmap probe. The learned CA-resampler branch improved WAN and has a historical peak at `t499/layer14` (`F@0.10=0.5012956284974035`), but repeated settings are around `0.49`, L4 hidden CA is only a small positive, and all tested noise/context/latent/fusion/FLF2V/gated variants remain below clean-GT VGGT. Use `wan_summary_2026-05-19.md` as the frozen WAN conclusion.
+9. **VGGT-Omega is wired, but the NOVA/FM probe ranking is now under audit.** Omega dense/full-token MLP, dense/full-token CA, and register-only / "Frozen Scene Tokens" CA completed for layers `12,16,20,24`. Best Omega is dense CA layer16 (`F@0.10=0.6576072630447046`), below VGGT1 MLP layer16 (`0.702544731989172`) and VGGT1 CA layer20 (`0.7014525243138799`). Do not treat this as a final claim that Omega has worse spatial representation; the next branch is a decoder-free SCRREAM direct spatial readout to test whether the fixed NOVA/FM generator interface is distorting cross-backbone representation ranking.
+10. **Keep ScanNet as a diagnostic baseline.** All new ScanNet K-view trials must set `scannet_max_interval=1` unless the experiment explicitly studies wider baselines. Compare ScanNet checkpoints with fixed robust metrics before claims.
+11. **Defer InteriorGS.** InteriorGS remains a plausible data-quality migration path, but it is not the immediate next branch.
 
 This plan is intentionally short and tied to what is already real in the repo.
 
@@ -210,7 +211,7 @@ Execution plan:
 4. training pack attempt `86306` failed immediately on scalar final-loss reporting; `train_wan_t2v_nova_adapter.py` was fixed
 5. replacement 15-grid training pack `86307` completed through `slurm/scrream_wan_t2v_ablation_pack_train.sbatch`, exit `0:0`, elapsed `13:36:04`
 6. best WAN Route2 result is `t499/layer09`: `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
-7. clean-GT VGGT layer `16` remains much stronger: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+7. current clean-GT VGGT1 MLP layer `16` 50ep remains much stronger: `best_val_fscore_tau_0.10=0.702544731989172`, `best_val_pred_to_gt_p90=0.19675995161135992`, `best_val_chamfer_l2=0.027118226668486994`; the older 9510-step VGGT layer16 reference was `F@0.10=0.6860468604251301`
 8. current WAN evidence is frozen in `docs/probe/wan_summary_2026-05-19.md`: learned CA resampler beats old hidden MLP in historical peak and repeated `t249` settings, but simple multi-layer hidden fusion, same-layer multi-timestep fusion, FLF2V hidden, latent tensor-choice readouts, and gated CA did not beat single-layer hidden CA. L4 `t249/layer14` is the only recent small positive, at F@0.10 `0.4919946248489035`.
 
 WAN repo/checkpoint network jobs use proxy `http://127.0.0.1:17890` through the compute-node SSH tunnel logic in `slurm/scrream_wan_t2v_*.sbatch`. The checkpoint, 2-sample feature smoke, window validation, and full cache generation have completed.
@@ -268,7 +269,24 @@ Near-term policy after WAN pause:
 5. E1 and E2 are complete and negative, so stop simple hidden fusion for now.
 6. F is complete and negative for hidden tokens; do not expand FLF2V hidden broadly unless later tensor-choice evidence motivates it.
 7. Stop B/G and C2 for now: model-output and pred-x0 latent learned-readout results are below hidden CA.
-8. Pause D as the main line. Optional appendix-only checks are L4 `t249/layer09` and one L4 `t249/layer14` seed repeat. The active work should move to the next backbone, starting with cache shape sanity, zero/shuffle control, one-step training smoke, and a small layer/readout pilot.
+8. Pause D as the main line. Optional appendix-only checks are L4 `t249/layer09` and one L4 `t249/layer14` seed repeat. The active work has moved past the Omega readout audit to the NOVA/FM probe-validity audit below; do not launch another broad WAN sweep without explicit new evidence.
+
+## Phase 6b — NOVA/FM probe-validity audit
+
+Current issue: under the same SCRREAM/NOVA protocol, VGGT-Omega ranks below VGGT1 even after dense MLP, dense CA, and register-only CA readouts. Since Omega should plausibly have stronger scene representations, the project must now test whether the fixed NOVA/FM generator can be used as a cross-backbone representation evaluator.
+
+First audit:
+
+- add a decoder-free direct spatial readout from frozen features to SCRREAM mesh-complete targets
+- keep the same `.pt`, train/val split, robust metrics, and `val_visual_40960` style outputs
+- compare VGGT1 layer16 / CA-layer20 reference features against Omega dense layer16 / layer20 features
+- use a controlled readout capacity, preferably a learned query cross-attention readout plus a small point head, with the same trainable budget across backbones
+
+Decision rule:
+
+- if Omega beats VGGT1 in the decoder-free readout but loses through NOVA/FM, the current project line measures compatibility with the NOVA condition-token manifold, not pure spatial representation quality
+- if Omega also loses in the decoder-free readout, the local claim that Omega's selected frozen tokens are stronger for this SCRREAM geometry target is not established
+- if a stronger but controlled NOVA bridge makes Omega catch VGGT1, the issue is the adapter/token contract rather than the generator itself
 
 ## Phase 7 — Proposal-facing interpretation
 

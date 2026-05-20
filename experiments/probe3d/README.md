@@ -13,9 +13,11 @@ The active probe state has moved to the corrected full SCRREAM branch. Important
 - default SCRREAM full-data target source is now sequence-filtered registered mesh-complete, not dense depth aggregation;
 - submit long data-prep and training work through `slurm/`; Slurm logs go to `slurm_out/`.
 - job `86140` completed the pre-meta-filter 20k / 500k trainplus-test MLP baseline on `air-node-02` with exit `0:0`; treat it as historical after the sequence-meta GT correction.
-- job `86286` completed the VGGT layer ablation on clean sequence-meta-filtered GT under `*robustval_metafilter_seed17_vggt_layerXX`; VGGT layer `16` is the current default, with layer `24` as the main comparison point.
+- job `86286` completed the older 9510-step VGGT layer ablation on clean sequence-meta-filtered GT under `*robustval_metafilter_seed17_vggt_layerXX`; it is now superseded by 50-epoch VGGT1 baselines. The current default is VGGT1 MLP layer `16` from job `86571`, `F@0.10=0.702544731989172`, and the strongest readout comparison is VGGT1 CA layer `20` from job `86572`, `F@0.10=0.7014525243138799`.
 - WAN is paused as a main branch after the 2026-05-19 audit; see `docs/probe/wan_summary_2026-05-19.md`. WAN sanity job `86316` completed; WAN pack job `86307` completed all 15 Route2 hidden-state runs. Old best WAN hidden baseline was `t499/layer09`, above zero/sample-shuffle controls but much weaker than clean-GT VGGT. Route2.1 `no_noise` / `low_noise`, targeted `t499/layer09 + token_layernorm`, `pair_tiled81`, latent tensor-choice probes, simple hidden-grid readouts, multi-layer fusion, multi-timestep fusion, FLF2V hidden, and gated CA completed and did not beat the best single-layer T2V CA baselines. The learned hidden CA resampler is the best WAN readout family: historical best `t499/layer14` reached `F@0.10=0.5012956284974035`; repeated settings are around `0.49`. WAN remains below clean-GT VGGT and should not be expanded broadly before the next backbone probe.
-- initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`.
+- initialize third-party submodules with `git submodule update --init --recursive`; VGGT training imports from `third_party/vggt`, and the VGGT-Omega probe imports from `third_party/vggt-omega`.
+- VGGT-Omega dense/full-token MLP, dense/full-token CA, and register-only / "Frozen Scene Tokens" CA completed layers `12,16,20,24` using official `checkpoints/vggt_omega/vggt_omega_1b_512.pt`. Best Omega is dense CA layer16 (`F@0.10=0.6576072630447046`), still below VGGT1 MLP layer16 (`0.702544731989172`) and VGGT1 CA layer20 (`0.7014525243138799`). Treat this as a NOVA/FM probe-validity warning, not a final model-quality conclusion.
+- VGGT1 50-epoch baseline completion finished as jobs `86571` (MLP-L4-H1024, elapsed `02:08:56`) and `86572` (cross_attention-L4-H1024, elapsed `02:13:51`), both with exit `0:0` on `air-node-02`.
 
 
 Minimal collaborator-side probing experiment for decoding complete 3D geometry from frozen NOVA3R / VGGT features.
@@ -78,7 +80,8 @@ Route2 result:
 - old best WAN hidden baseline: `t499/layer09`, `best_val_fscore_tau_0.10=0.46988987902779306`, `best_val_pred_to_gt_p90=0.48718947172164917`, `best_val_chamfer_l2=0.21040735269586244`
 - historical best WAN interface: `t499/layer14 + wan_cross_attn_resampler`, `best_val_fscore_tau_0.10=0.5012956284974035`, `best_val_pred_to_gt_p90=0.4229188362757365`, `best_val_chamfer_l2=0.10908368105689685`; user visual inspection confirmed improvement
 - repeated CA-resampler signal: low-LR `t499/layer14` rerun `86453` was negative (`F@0.10=0.4292316005720653`); full-grid `86468` best F@0.10 is `t249/layer14=0.48913902331806663`, while best p90 / Chamfer is `t249/layer09=0.410525918006897 / 0.11981592203179996`
-- clean-GT VGGT layer `16`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+- current VGGT1 MLP layer `16` 50ep: `best_val_fscore_tau_0.10=0.702544731989172`, `best_val_pred_to_gt_p90=0.19675995161135992`, `best_val_chamfer_l2=0.027118226668486994`
+- historical clean-GT VGGT layer `16` from job `86286`: `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
 - Route2.1 result: `no_noise` / `low_noise` WAN cache modes for layers `9,14,29` completed, but the best clean/low-noise run (`no_noise/layer29`, `F@0.10=0.44840173`) did not beat old Route2 `t499/layer09`
 - targeted norm check: `t499/layer09 + token_layernorm` completed as job `86395`; it did not beat old Route2 best (`F@0.10=0.45476213575933216`, `pred_to_gt_p90=0.484821617603302`, `Chamfer=0.1771892917652925`)
 - pair-context check: `pair_tiled81` completed as jobs `86396 -> 86397 -> 86400 -> 86401`; it did not beat old Route2 best (`F@0.10=0.4429200036613287`, `pred_to_gt_p90=0.5104739194115003`, `Chamfer=0.16478415516515574`)
@@ -206,6 +209,49 @@ sbatch --gres=gpu:a100:1 --mem=128G \
   slurm/scrream_wan_flf2v_precompute.sbatch
 ```
 
+## SCRREAM VGGT-Omega probe
+
+VGGT-Omega is the next backbone probe after the WAN audit. It keeps the clean SCRREAM mesh-complete `.pt`, split, MLP-L4 adapter, NOVA `scene_ae`, `nova_flow`, and robust validation fixed.
+
+- source: `third_party/vggt-omega`
+- official checkpoint path: `checkpoints/vggt_omega/vggt_omega_1b_512.pt`
+- important audit note: `checkpoints/vggt_omega/model.pt` was checked on `2026-05-19` and is byte-identical to `checkpoints/vggt/model.pt`; it has old VGGT 4-register / 14-patch / `global_blocks` keys and must not be used as a VGGT-Omega checkpoint
+- training entry: `experiments/probe3d/train_vggt_nova_adapter.py --backbone vggt_omega`
+- download/preflight Slurm: `slurm/scrream_vggt_omega_download.sbatch`
+- layer pack Slurm: `slurm/scrream_vggt_omega_layer_ablation_pack_train.sbatch`
+
+Dense/full aggregator tokens use `aggregator.cached_layer_indices` forced to all layers so old VGGT comparison layers are available. The first dense MLP job `86564` completed with:
+
+| backbone / layer | F@0.10 | pred-to-GT p90 | Chamfer-L2 |
+| --- | ---: | ---: | ---: |
+| old VGGT layer16 | `0.6860468604251301` | `0.20770130679011345` | `0.026904070439438026` |
+| old VGGT layer24 | `0.6802513448244976` | `0.25152526050806046` | `0.03554012098660072` |
+| Omega dense layer16 | `0.6550556579677611` | `0.23105039075016975` | `0.03261705581098795` |
+| Omega dense layer24 | `0.6133813288610513` | `0.25702105338374776` | `0.03972778360669812` |
+
+The later Omega CA and register-only runs completed the immediate feature/readout audit:
+
+| Omega token / adapter | best layer | F@0.10 | pred-to-GT p90 | Chamfer-L2 |
+| --- | ---: | ---: | ---: | ---: |
+| dense MLP | 16 | `0.6550556579677611` | `0.23105039075016975` | `0.03261705581098795` |
+| dense CA | 16 | `0.6576072630447046` | `0.23843258867661157` | `0.033605430430422224` |
+| register-only CA | 16 | `0.4930976482166729` | `0.4645070905486743` | `0.20077569534381232` |
+
+This is a live integration but a negative result versus VGGT1 across the tested Omega readout branches. The completed VGGT1 50ep table is:
+
+| adapter / layer | F@0.10 | pred-to-GT p90 | Chamfer-L2 |
+| --- | ---: | ---: | ---: |
+| MLP layer12 | `0.5316993988168482` | `0.37930816908677417` | `0.07861695190270741` |
+| MLP layer16 | `0.702544731989172` | `0.19675995161135992` | `0.027118226668486994` |
+| MLP layer20 | `0.519013588803542` | `0.38937361538410187` | `0.07316385923574369` |
+| MLP layer24 | `0.6690686277634136` | `0.2389497272670269` | `0.0331160935262839` |
+| CA layer12 | `0.5065650562192365` | `0.33501065025726956` | `0.07443799295773108` |
+| CA layer16 | `0.6835200371527321` | `0.23028291016817093` | `0.030130337458103895` |
+| CA layer20 | `0.7014525243138799` | `0.21181315431992212` | `0.027010128212471802` |
+| CA layer24 | `0.6204781376731087` | `0.2675088259081046` | `0.03806558856740594` |
+
+Use MLP layer16 as the main VGGT1 baseline. CA layer20 is the key readout comparison because it nearly ties MLP layer16 and rescues the layer20 representation. Since Omega remains below VGGT1 after dense MLP, dense CA, and register-only CA, the next experiment should not be another broad Omega sweep. It should be a decoder-free SCRREAM direct spatial readout that tests whether Omega ranks above VGGT1 without the NOVA/FM generator interface.
+
 Run these commands from the `nova3r` conda environment.
 
 Small smoke directly from shell if you only need a quick local check:
@@ -294,11 +340,13 @@ Important: job `86140` and the old robust VGGT layer ablation job `86149` used t
 
 - `experiments/probe3d/result/scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_vggt_layerXX`
 
-Current clean-GT VGGT ranking:
+Historical clean-GT VGGT ranking from 9510-step job `86286`:
 
-- layer `16`: current default, `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
-- layer `24`: main comparison point, `best_val_fscore_tau_0.10=0.6802513448244976`, `best_val_pred_to_gt_p90=0.25152526050806046`, `best_val_chamfer_l2=0.03554012098660072`
+- layer `16`: old best 9510-step VGGT reference, `best_val_fscore_tau_0.10=0.6860468604251301`, `best_val_pred_to_gt_p90=0.20770130679011345`, `best_val_chamfer_l2=0.026904070439438026`
+- layer `24`: old close comparison point, `best_val_fscore_tau_0.10=0.6802513448244976`, `best_val_pred_to_gt_p90=0.25152526050806046`, `best_val_chamfer_l2=0.03554012098660072`
 - layer `20`: no longer the clean-GT default, `best_val_fscore_tau_0.10=0.548158719135383`
+
+Current VGGT1 reference after the 50-epoch completion is MLP layer `16` from job `86571`: `best_val_fscore_tau_0.10=0.702544731989172`, `best_val_pred_to_gt_p90=0.19675995161135992`, `best_val_chamfer_l2=0.027118226668486994`. The main readout comparison is CA layer `20` from job `86572`: `F@0.10=0.7014525243138799`, `pred_to_gt_p90=0.21181315431992212`, `Chamfer=0.027010128212471802`.
 
 Completed run artifacts:
 

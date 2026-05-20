@@ -40,6 +40,7 @@ git submodule update --init --recursive
 Current submodules:
 
 - `third_party/vggt` -> `https://github.com/facebookresearch/vggt.git`
+- `third_party/vggt-omega` -> `https://github.com/facebookresearch/vggt-omega.git`
 - `third_party/Wan2.1` -> `https://github.com/Wan-Video/Wan2.1.git`
 - `third_party/VidFM3D` -> `https://github.com/zxhuang1698/VidFM3D.git`
 
@@ -135,6 +136,7 @@ Current local research-workspace state on 2026-05-19:
 - `checkpoints/scene_n2/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/scene_ae/checkpoint-last.pth` and `.hydra/config.yaml` are present.
 - `checkpoints/vggt/model.pt` is present.
+- `checkpoints/vggt_omega/vggt_omega_1b_512.pt` is present and is the official VGGT-Omega checkpoint for the probe. Do not use `checkpoints/vggt_omega/model.pt`; it was checked on `2026-05-19` and is byte-identical to old `checkpoints/vggt/model.pt`.
 - WAN checkpoint target `checkpoints/wan2.1/Wan2.1-T2V-1.3B-Diffusers` is present locally (~27 GB); future downloads/preflight are handled by `slurm/scrream_wan_t2v_download.sbatch`.
 - Proxy `http://127.0.0.1:7896` is the working non-WAN route for checkpoint / HuggingFace access on this machine.
 - WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890`; the WAN Slurm scripts create a compute-node SSH tunnel back to `air-server:127.0.0.1:17890` by default.

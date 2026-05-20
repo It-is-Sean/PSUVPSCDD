@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=scrream_vggt_layer_pack
+#SBATCH --job-name=scrream_vggt_direct_point_pack
 #SBATCH --output=slurm_out/%x_%j.out
 #SBATCH --error=slurm_out/%x_%j.err
 #SBATCH --time=48:00:00
@@ -29,8 +29,9 @@ else
   export ALL_PROXY="${ALL_PROXY:-http://127.0.0.1:7896}"
 fi
 
-LAYERS_CSV="${SCRREAM_ABLATION_LAYERS:-0,4,8,12,16,20,24}"
-IFS=',' read -r -a LAYERS <<< "$LAYERS_CSV"
+RUN_SPECS_CSV="${SCRREAM_DIRECT_RUN_SPECS:-vggt:full:16:zero:vggt1_layer16_zero_control,vggt:full:16:sample_shuffle:vggt1_layer16_shuffle_control,vggt:full:16:none:vggt1_layer16,vggt:full:20:none:vggt1_layer20,vggt_omega:full:16:none:vggt_omega_dense_layer16,vggt_omega:full:20:none:vggt_omega_dense_layer20}"
+IFS=',' read -r -a RUN_SPECS <<< "$RUN_SPECS_CSV"
+
 VISIBLE_RAW="${CUDA_VISIBLE_DEVICES:-}"
 if [[ -n "$VISIBLE_RAW" ]]; then
   IFS=',' read -r -a GPU_IDS <<< "$VISIBLE_RAW"
@@ -43,17 +44,18 @@ else
 fi
 MAX_PARALLEL="${SCRREAM_PACK_PARALLEL:-${#GPU_IDS[@]}}"
 if [[ "$MAX_PARALLEL" -lt 1 ]]; then
-  echo "No GPUs visible for packed layer ablation." >&2
+  echo "No GPUs visible for packed direct point probe." >&2
   exit 2
 fi
 
 ADAPTER_DATA="${SCRREAM_ADAPTER_DATA:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt}"
-NOVA_CKPT="${SCRREAM_NOVA_CKPT:-checkpoints/scene_ae/checkpoint-last.pth}"
 VGGT_WEIGHTS="${SCRREAM_VGGT_WEIGHTS:-checkpoints/vggt/model.pt}"
-RUN_PREFIX="${SCRREAM_ABLATION_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17_vggt_layer}"
-FEATURE_CACHE_RUN_PREFIX="${SCRREAM_FEATURE_CACHE_RUN_PREFIX:-$RUN_PREFIX}"
-ADAPTER_TYPE="${SCRREAM_ADAPTER_TYPE:-mlp}"
-NUM_QUERIES="${SCRREAM_NUM_QUERIES:-20000}"
+VGGT_OMEGA_WEIGHTS="${SCRREAM_VGGT_OMEGA_WEIGHTS:-checkpoints/vggt_omega/vggt_omega_1b_512.pt}"
+VGGT_OMEGA_IMAGE_RESOLUTION="${SCRREAM_VGGT_OMEGA_IMAGE_RESOLUTION:-512}"
+RUN_PREFIX="${SCRREAM_DIRECT_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_direct_point_ca_l4_h512_seed17_}"
+FEATURE_CACHE_PREFIX="${SCRREAM_DIRECT_FEATURE_CACHE_PREFIX:-$RUN_PREFIX}"
+POINT_QUERIES="${SCRREAM_POINT_QUERIES:-4096}"
+TARGET_TRAIN_POINTS="${SCRREAM_TARGET_TRAIN_POINTS:-4096}"
 EPOCHS="${SCRREAM_EPOCHS:-50}"
 BATCH_SIZE="${SCRREAM_BATCH_SIZE:-1}"
 TRAIN_COUNT="${SCRREAM_TRAIN_COUNT:-317}"
@@ -69,33 +71,27 @@ if [[ ! -f "$ADAPTER_DATA" ]]; then
   echo "Missing SCRREAM adapter dataset: $ADAPTER_DATA" >&2
   exit 2
 fi
-if [[ ! -f "$NOVA_CKPT" ]]; then
-  echo "Missing NOVA checkpoint: $NOVA_CKPT" >&2
-  exit 2
-fi
 if [[ ! -f "$VGGT_WEIGHTS" ]]; then
   echo "Missing VGGT weights: $VGGT_WEIGHTS" >&2
   exit 2
 fi
+if [[ ! -f "$VGGT_OMEGA_WEIGHTS" ]]; then
+  echo "Missing VGGT-Omega weights: $VGGT_OMEGA_WEIGHTS" >&2
+  exit 2
+fi
 
-echo "Packed SCRREAM VGGT layer ablation"
-echo "  layers=$LAYERS_CSV"
+echo "Packed SCRREAM direct point probe"
+echo "  run_specs=$RUN_SPECS_CSV"
 echo "  visible_gpus=${GPU_IDS[*]}"
 echo "  max_parallel=$MAX_PARALLEL"
 echo "  adapter_data=$ADAPTER_DATA"
-echo "  adapter_type=$ADAPTER_TYPE"
-echo "  adapter_layers=${SCRREAM_ADAPTER_LAYERS:-4}"
-echo "  adapter_hidden_dim=${SCRREAM_ADAPTER_HIDDEN_DIM:-1024}"
-echo "  adapter_heads=${SCRREAM_ADAPTER_HEADS:-8}"
-echo "  adapter_mlp_ratio=${SCRREAM_ADAPTER_MLP_RATIO:-2.0}"
 echo "  run_prefix=$RUN_PREFIX"
-echo "  feature_cache_run_prefix=$FEATURE_CACHE_RUN_PREFIX"
 echo "  max_steps=$MAX_STEPS"
-echo "  num_queries=$NUM_QUERIES"
-echo "  eval_batches=${SCRREAM_EVAL_BATCHES:-0}"
+echo "  point_queries=$POINT_QUERIES"
+echo "  target_train_points=$TARGET_TRAIN_POINTS"
 echo "  val_metric_max_points=${SCRREAM_VAL_METRIC_MAX_POINTS:-20000}"
 echo "  val_preview_samples=${SCRREAM_VAL_PREVIEW_SAMPLES:-12}"
-echo "  val_preview_queries=${SCRREAM_VAL_PREVIEW_QUERIES:-40960}"
+echo "  val_preview_queries=${SCRREAM_VAL_PREVIEW_QUERIES:-4096}"
 nvidia-smi || true
 
 declare -a PIDS=()
@@ -118,36 +114,48 @@ wait_for_slot() {
   done
 }
 
-for idx in "${!LAYERS[@]}"; do
+for idx in "${!RUN_SPECS[@]}"; do
   wait_for_slot
-  layer="${LAYERS[$idx]}"
-  layer_padded="$(printf '%02d' "$layer")"
+  spec="${RUN_SPECS[$idx]}"
+  IFS=':' read -r backbone token_mode layer control suffix <<< "$spec"
+  if [[ -z "${backbone:-}" || -z "${token_mode:-}" || -z "${layer:-}" || -z "${control:-}" || -z "${suffix:-}" ]]; then
+    echo "Bad run spec '$spec'. Expected backbone:token_mode:layer:feature_control:suffix" >&2
+    exit 2
+  fi
   gpu="${GPU_IDS[$((idx % ${#GPU_IDS[@]}))]}"
-  output_dir="${SCRREAM_OUTPUT_BASE:-experiments/probe3d/result}/${RUN_PREFIX}${layer_padded}"
-  feature_cache_dir="${SCRREAM_FEATURE_CACHE_BASE:-experiments/probe3d/feature_cache}/${FEATURE_CACHE_RUN_PREFIX}${layer_padded}"
+  output_dir="${SCRREAM_OUTPUT_BASE:-experiments/probe3d/result}/${RUN_PREFIX}${suffix}"
+  feature_cache_dir="${SCRREAM_FEATURE_CACHE_BASE:-experiments/probe3d/feature_cache}/${FEATURE_CACHE_PREFIX}${suffix}"
   mkdir -p "$output_dir" "$feature_cache_dir"
-  log_file="slurm_out/scrream_vggt_${ADAPTER_TYPE}_layer_${layer_padded}_${SLURM_JOB_ID:-manual}.log"
-  echo "Launching layer=$layer on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
+  log_file="slurm_out/scrream_vggt_direct_point_${suffix}_${SLURM_JOB_ID:-manual}.log"
+  echo "Launching direct point spec=$spec on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
   (
     export CUDA_VISIBLE_DEVICES="$gpu"
     export FEATURE_MEMORY_CACHE_MAX="${FEATURE_MEMORY_CACHE_MAX:-0}"
-    python -u experiments/probe3d/train_vggt_nova_adapter.py \
+    extra_weights=()
+    if [[ "$backbone" == "vggt_omega" ]]; then
+      extra_weights+=(--vggt_omega_weights "$VGGT_OMEGA_WEIGHTS" --vggt_omega_image_resolution "$VGGT_OMEGA_IMAGE_RESOLUTION")
+    else
+      extra_weights+=(--vggt_weights "$VGGT_WEIGHTS")
+    fi
+    python -u experiments/probe3d/train_vggt_direct_point_adapter.py \
+      --backbone "$backbone" \
+      "${extra_weights[@]}" \
       --dataset scrream_adapter \
       --data_root "$ADAPTER_DATA" \
-      --nova_ckpt "$NOVA_CKPT" \
-      --vggt_weights "$VGGT_WEIGHTS" \
-      --adapter_type "$ADAPTER_TYPE" \
+      --vggt_layer "$layer" \
+      --vggt_token_mode "$token_mode" \
+      --feature_control "$control" \
+      --readout_type point_ca \
+      --point_queries "$POINT_QUERIES" \
       --adapter_layers "${SCRREAM_ADAPTER_LAYERS:-4}" \
-      --adapter_hidden_dim "${SCRREAM_ADAPTER_HIDDEN_DIM:-1024}" \
+      --adapter_hidden_dim "${SCRREAM_ADAPTER_HIDDEN_DIM:-512}" \
       --adapter_heads "${SCRREAM_ADAPTER_HEADS:-8}" \
       --adapter_mlp_ratio "${SCRREAM_ADAPTER_MLP_RATIO:-2.0}" \
-      --loss_type "${SCRREAM_LOSS_TYPE:-nova_flow}" \
-      --num_queries "$NUM_QUERIES" \
-      --vggt_layer "$layer" \
+      --target_train_points "$TARGET_TRAIN_POINTS" \
+      --target_norm_mode "${SCRREAM_TARGET_NORM_MODE:-median_3}" \
       --num_views 2 \
       --train_split "${SCRREAM_TRAIN_SPLIT:-train}" \
       --val_split "${SCRREAM_VAL_SPLIT:-val}" \
-      --test_split "${SCRREAM_TEST_SPLIT:-test}" \
       --batch_size "$BATCH_SIZE" \
       --num_workers "${SCRREAM_NUM_WORKERS:-4}" \
       --lr "${SCRREAM_LR:-1e-4}" \
@@ -155,16 +163,15 @@ for idx in "${!LAYERS[@]}"; do
       --save_every "${SCRREAM_SAVE_EVERY:-500}" \
       --val_every "${SCRREAM_VAL_EVERY:-500}" \
       --eval_batches "${SCRREAM_EVAL_BATCHES:-0}" \
-      --val_flow_t_bins "${SCRREAM_VAL_FLOW_T_BINS:-10}" \
       --val_metric_max_points "${SCRREAM_VAL_METRIC_MAX_POINTS:-20000}" \
       --val_preview_samples "${SCRREAM_VAL_PREVIEW_SAMPLES:-12}" \
-      --val_preview_queries "${SCRREAM_VAL_PREVIEW_QUERIES:-40960}" \
-      --save_ply_queries "${SCRREAM_SAVE_PLY_QUERIES:-40960}" \
+      --val_preview_queries "${SCRREAM_VAL_PREVIEW_QUERIES:-4096}" \
+      --save_ply_queries "${SCRREAM_SAVE_PLY_QUERIES:-4096}" \
       --feature_cache_dir "$feature_cache_dir" \
       --output_dir "$output_dir" \
       --swanlab \
       --swanlab_project "${SCRREAM_SWANLAB_PROJECT:-PSUVPSC3DD}" \
-      --swanlab_experiment "${RUN_PREFIX}${layer_padded}"
+      --swanlab_experiment "${RUN_PREFIX}${suffix}"
   ) >"$log_file" 2>&1 &
   PIDS+=("$!")
 done

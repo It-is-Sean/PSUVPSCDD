@@ -1,6 +1,6 @@
 # PSUVPSC3DD / Probe Workspace
 
-## Current canonical status — 2026-05-19
+## Current canonical status — 2026-05-20
 
 This branch is now a **server-side research workspace**. The source of truth is:
 
@@ -21,10 +21,12 @@ Important corrections that override older sections below:
 5. **SCRREAM full-data status:** the old `eval_scrream` package is still invalid for claims, but the full SCRREAM tree is now available locally at `~/datasets/SCRREAM`.
 6. **Current SCRREAM GT path:** the active data bridge uses registered sequence-filtered scene meshes as the complete target source. For `mesh_complete`, it reads each SCRREAM sequence `meta.txt`, samples only the listed object meshes from `sceneXX/meshes/*.obj` proportional to surface area, crops to the selected two-view union frustum, transforms targets into the first input camera frame, and exports fixed-size adapter targets.
 7. **Slurm convention:** long data generation and training jobs should be launched through scripts in `slurm/`, with logs in `slurm_out/`.
-8. **SCRREAM baseline status:** job `86140` completed the old 20k/500k SCRREAM mesh-complete MLP baseline, and job `86149` completed the pre-meta-filter robust VGGT layer ablation. A sequence-meta-filtered clean GT was regenerated on `2026-05-10`; clean-GT VGGT job `86286` completed successfully on `2026-05-11`. The current clean-GT default is VGGT layer `16`, with layer `24` as the main comparison point.
+8. **SCRREAM baseline status:** job `86140` completed the old 20k/500k SCRREAM mesh-complete MLP baseline, and job `86149` completed the pre-meta-filter robust VGGT layer ablation. A sequence-meta-filtered clean GT was regenerated on `2026-05-10`; clean-GT VGGT job `86286` completed successfully on `2026-05-11`. The current clean-GT default is now VGGT1 MLP layer `16` at 50 epochs from job `86571`, `F@0.10=0.702544731989172`; VGGT1 CA layer `20` from job `86572` is the strongest readout comparison, `F@0.10=0.7014525243138799`.
 9. **Local weights:** NOVA3R `scene_n1`, `scene_n2`, `scene_ae`, and VGGT weights are staged under `checkpoints/`; non-WAN Slurm scripts default network proxy variables to `http://127.0.0.1:7896`.
-10. **Third-party source:** VGGT, Wan2.1, and VidFM3D are Git submodules under `third_party/`; run `git submodule update --init --recursive` after a fresh clone. Wan2.1 / WAN probe dependencies stay separate from the root env.
+10. **Third-party source:** VGGT, VGGT-Omega, Wan2.1, and VidFM3D are Git submodules under `third_party/`; run `git submodule update --init --recursive` after a fresh clone. Wan2.1 / WAN probe dependencies stay separate from the root env.
 11. **WAN Route2 status:** WAN is now a paused / closed model-coverage branch as of `2026-05-19`; see `docs/probe/wan_summary_2026-05-19.md`. It used WAN2.1 T2V video-context features on the same clean SCRREAM `.pt`, split, adapter/decoder family, and robust validation setup as the VGGT ablation. The learned hidden CA resampler was the only clearly positive WAN readout: historical best was `t499/layer14 + wan_cross_attn_resampler` with `F@0.10=0.5012956284974035`, `pred_to_gt_p90=0.4229188362757365`, `Chamfer=0.10908368105689685`, and user visual inspection improved. Repeated settings were closer to `0.49`, and L4 CA `t249/layer14` reached `F@0.10=0.4919946248489035`. WAN remains below clean-GT VGGT layer `16` (`F@0.10=0.6860468604251301`), and no broad WAN sweeps are recommended before testing the next backbone. WAN repo/checkpoint jobs use proxy `http://127.0.0.1:17890` through the Slurm SSH tunnel logic in `slurm/scrream_wan_*`.
+12. **VGGT-Omega status:** VGGT-Omega is wired as a new backbone through `third_party/vggt-omega` and `--backbone vggt_omega`. Use `checkpoints/vggt_omega/vggt_omega_1b_512.pt`; `checkpoints/vggt_omega/model.pt` is an old-VGGT duplicate and invalid for Omega claims. Omega dense/full-token MLP, dense/full-token CA, and register-only / "Frozen Scene Tokens" CA have completed for layers `12,16,20,24`. Best Omega is dense CA layer `16` (`F@0.10=0.6576072630447046`), still well below VGGT1 MLP layer `16` (`0.702544731989172`) and VGGT1 CA layer `20` (`0.7014525243138799`).
+13. **VGGT1 50ep baseline completion:** jobs `86571` (MLP-L4-H1024) and `86572` (cross_attention-L4-H1024) completed `0:0` on `air-node-02`. MLP layer16 is the new official VGGT1 baseline (`F@0.10=0.702544731989172`, `p90=0.19675995161135992`, `Chamfer=0.027118226668486994`). CA layer20 is nearly tied on F-score (`0.7014525243138799`) and has the best Chamfer among the 50ep readouts (`0.027010128212471802`).
 
 This repository is currently a **research execution workspace** around a simple question:
 
@@ -241,11 +243,20 @@ After user review, the active plan is to align the ScanNet target/loss more clos
 The practical near-term plan is:
 
 1. keep the old `eval_scrream` correction in mind and do not reuse those invalid claims
-2. use clean-GT VGGT layer `16` as the current default representation, with layer `24` as the closest comparison point
+2. use clean-GT VGGT1 MLP layer `16` 50ep as the current default representation, with VGGT1 CA layer `20` 50ep as the closest readout comparison
 3. treat WAN as paused after `docs/probe/wan_summary_2026-05-19.md`; optional WAN follow-ups are appendix-only
-4. prepare the next backbone under the same clean SCRREAM / NOVA probe protocol, starting with a small layer/readout smoke rather than a broad ablation
-5. expand SCRREAM training sample scale beyond the current 329 official pairs after the next-backbone pilot is defined
-6. keep the fixed-30 ScanNet metrics as a failure-mode baseline
+4. stop treating another Omega sweep as the main line: dense MLP, dense CA, and register-only CA are all below VGGT1 under the NOVA/FM probe
+5. run a NOVA/FM probe-validity audit with a decoder-free SCRREAM spatial readout, so we can distinguish representation quality from compatibility with the fixed generator condition-token interface
+6. expand SCRREAM training sample scale beyond the current 329 official pairs after the next-backbone pilot is defined
+7. keep the fixed-30 ScanNet metrics as a failure-mode baseline
+
+### VGGT-Omega probe setup
+
+VGGT-Omega is the next backbone probe after WAN. The source lives at `third_party/vggt-omega`, and `experiments/probe3d/train_vggt_nova_adapter.py` supports `--backbone vggt_omega` for dense/full-token comparison against clean-GT VGGT. Use the official 512 checkpoint path `checkpoints/vggt_omega/vggt_omega_1b_512.pt`; the file currently named `checkpoints/vggt_omega/model.pt` was verified on `2026-05-19` to be byte-identical to the old VGGT checkpoint and must not be used as a VGGT-Omega result source.
+
+Omega formal runs now cover dense/full-token MLP, dense/full-token CA, and paper-faithful register-only / "Frozen Scene Tokens" CA for layers `12,16,20,24`. Best Omega result is dense CA layer `16`: `F@0.10=0.6576072630447046`, `p90=0.23843258867661157`, `Chamfer=0.033605430430422224`. Dense MLP layer `16` is close but lower (`F@0.10=0.6550556579677611`), and register-only CA is much weaker (best register layer `16`, `F@0.10=0.4930976482166729`). Since all Omega branches are below VGGT1 under the NOVA/FM decoder probe, the current risk is no longer just an Omega readout choice; it is whether this fixed generator interface is a valid cross-backbone representation evaluator.
+
+Next experiment should therefore be a probe-validity audit: train a decoder-free direct SCRREAM spatial readout on the same frozen VGGT1 and Omega features. If Omega beats VGGT1 there but loses through NOVA/FM, the project should frame the current metric as generator-compatibility rather than pure spatial representation quality.
 
 ## Documentation map
 

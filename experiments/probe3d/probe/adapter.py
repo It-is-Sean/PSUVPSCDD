@@ -607,6 +607,55 @@ class CrossAttentionBlock(nn.Module):
         return queries
 
 
+class DirectPointCrossAttentionReadout(nn.Module):
+    """
+    Decoder-free point-cloud readout from frozen visual tokens.
+
+    This is used as a probe-validity audit: it keeps the same frozen VGGT /
+    VGGT-Omega token streams as the NOVA adapter, but bypasses the NOVA/FM
+    generator and directly regresses a fixed set of 3D point queries.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        point_queries: int = 4096,
+        hidden_dim: int = 512,
+        adapter_layers: int = 4,
+        num_heads: int = 8,
+        mlp_ratio: float = 2.0,
+    ) -> None:
+        super().__init__()
+        if point_queries <= 0:
+            raise ValueError(f"point_queries must be positive, got {point_queries}")
+        if adapter_layers < 1 or adapter_layers > 8:
+            raise ValueError(f"adapter_layers must be between 1 and 8, got {adapter_layers}")
+        if hidden_dim % num_heads != 0:
+            raise ValueError(f"hidden_dim must be divisible by num_heads, got {hidden_dim} and {num_heads}")
+        self.input_dim = int(input_dim)
+        self.point_queries = int(point_queries)
+        self.hidden_dim = int(hidden_dim)
+        self.adapter_layers = int(adapter_layers)
+        self.num_heads = int(num_heads)
+        self.mlp_ratio = float(mlp_ratio)
+
+        self.input_proj = nn.Linear(self.input_dim, self.hidden_dim)
+        self.point_query_tokens = nn.Parameter(torch.randn(1, self.point_queries, self.hidden_dim) * 0.02)
+        self.blocks = nn.ModuleList(
+            [CrossAttentionBlock(self.hidden_dim, self.num_heads, self.mlp_ratio, gated=False) for _ in range(self.adapter_layers)]
+        )
+        self.output_norm = nn.LayerNorm(self.hidden_dim)
+        self.xyz_head = nn.Linear(self.hidden_dim, 3)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        tokens = _flatten_tokens(tokens)
+        context = self.input_proj(tokens.float())
+        queries = self.point_query_tokens.expand(context.shape[0], -1, -1)
+        for block in self.blocks:
+            queries = block(queries, context)
+        return self.xyz_head(self.output_norm(queries)).contiguous()
+
+
 class VGGTToNovaAttentionAdapter(nn.Module):
     """
     Cross-attention probe from frozen VGGT tokens to NOVA3R scene tokens.

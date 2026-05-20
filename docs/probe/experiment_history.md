@@ -1,5 +1,96 @@
 # Experiment history summary
 
+## 2026-05-20 VGGT-Omega all-readout result and probe-validity warning
+
+After the VGGT1 50ep table was established, VGGT-Omega was tested with the intended readout branches under the same clean SCRREAM / NOVA protocol: dense/full-token MLP, dense/full-token CA, and paper-faithful register-only / "Frozen Scene Tokens" CA. All used official `checkpoints/vggt_omega/vggt_omega_1b_512.pt`; `checkpoints/vggt_omega/model.pt` remains invalid because it is byte-identical to old VGGT.
+
+Final Omega table:
+
+| token / adapter | layer | F@0.10 | pred-to-GT p90 | Chamfer-L2 | final loss |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| dense MLP | 12 | `0.5912861498349988` | `0.34288639575242996` | `0.05805950021992127` | `0.8016953468322754` |
+| dense MLP | 16 | `0.6550556579677611` | `0.23105039075016975` | `0.03261705581098795` | `0.7112300992012024` |
+| dense MLP | 20 | `0.49715839866752276` | `0.4155505473415057` | `0.09253174935777982` | `0.769225537776947` |
+| dense MLP | 24 | `0.6133813288610513` | `0.25702105338374776` | `0.03972778360669812` | `0.733043909072876` |
+| dense CA | 12 | `0.5443128607036147` | `0.3604150017102559` | `0.06301267848660548` | `0.7357202768325806` |
+| dense CA | 16 | `0.6576072630447046` | `0.23843258867661157` | `0.033605430430422224` | `0.7452354431152344` |
+| dense CA | 20 | `0.6355128583428035` | `0.2521020943919818` | `0.03658242244273424` | `0.7529057860374451` |
+| dense CA | 24 | `0.6083635586605262` | `0.27888710300127667` | `0.042148534984638296` | `0.7519074082374573` |
+| register CA | 12 | `0.46187941908161384` | `0.4666140402356784` | `0.23257030422488847` | `0.818842887878418` |
+| register CA | 16 | `0.4930976482166729` | `0.4645070905486743` | `0.20077569534381232` | `0.8135836124420166` |
+| register CA | 20 | `0.4845513451727304` | `0.46236328532298404` | `0.17039957642555237` | `0.8264030814170837` |
+| register CA | 24 | `0.44420459925549055` | `0.5899869650602341` | `0.261121762295564` | `0.839550256729126` |
+
+Comparison:
+
+- best Omega is dense CA layer16, F@0.10 `0.6576072630447046`;
+- VGGT1 MLP layer16 remains stronger, F@0.10 `0.702544731989172`;
+- VGGT1 CA layer20 also remains stronger, F@0.10 `0.7014525243138799`;
+- register-only / "Frozen Scene Tokens" is not a good drop-in condition source for this NOVA/FM probe.
+
+Interpretation:
+
+- this is not enough to conclude Omega has worse spatial representation;
+- it is enough to question whether the fixed NOVA/FM decoder probe is a reliable cross-backbone representation evaluator;
+- the next required experiment is decoder-free direct SCRREAM spatial readout on the same frozen features. If Omega beats VGGT1 there but loses through NOVA/FM, the current method should be framed as generator-compatibility probing rather than pure representation-quality probing.
+
+## 2026-05-19 VGGT-Omega dense-token pilot and VGGT1 50ep baseline completion
+
+After WAN was paused, the next backbone branch moved to VGGT-Omega while also completing a cleaner VGGT1 50-epoch baseline table.
+
+Implementation:
+
+- `third_party/vggt-omega` was added as a submodule.
+- `train_vggt_nova_adapter.py` now supports `--backbone vggt_omega`.
+- Official Omega weights are expected at `checkpoints/vggt_omega/vggt_omega_1b_512.pt`.
+- `checkpoints/vggt_omega/model.pt` was audited and is byte-identical to old `checkpoints/vggt/model.pt`; it must not be used for Omega conclusions.
+- `slurm/scrream_vggt_omega_layer_ablation_pack_train.sbatch` runs dense/full-token Omega layer packs.
+- `slurm/scrream_vggt_layer_ablation_pack_train.sbatch` now supports `SCRREAM_ADAPTER_TYPE`, `SCRREAM_FEATURE_CACHE_RUN_PREFIX`, `SCRREAM_ADAPTER_HEADS`, and `SCRREAM_ADAPTER_MLP_RATIO`, enabling VGGT1 MLP and CA readout baselines to share old frozen feature caches.
+
+Omega dense/full-token formal job `86564` completed `0:0` for layers `16,24`:
+
+| setting | F@0.10 | pred-to-GT p90 | Chamfer-L2 | final loss |
+| --- | ---: | ---: | ---: | ---: |
+| old VGGT layer16 | `0.6860468604251301` | `0.20770130679011345` | `0.026904070439438026` | `0.8401239514350891` |
+| old VGGT layer24 | `0.6802513448244976` | `0.25152526050806046` | `0.03554012098660072` | `0.8450863361358643` |
+| Omega dense layer16 | `0.6550556579677611` | `0.23105039075016975` | `0.03261705581098795` | `0.7112300992012024` |
+| Omega dense layer24 | `0.6133813288610513` | `0.25702105338374776` | `0.03972778360669812` | `0.733043909072876` |
+
+Interpretation:
+
+- Omega dense/full-token integration is live.
+- The first Omega result is below old clean-GT VGGT at both layer16 and layer24.
+- This should be treated as a setup / feature branch / preprocessing / readout audit trigger, not a final scientific conclusion that Omega is worse.
+- Later `2026-05-20` runs completed dense CA and register-only CA; see the section above for the final Omega all-readout table.
+
+VGGT1 50ep baseline completion final state at `2026-05-19 22:50 CST`:
+
+- CA smoke job `86568` completed `0:0`.
+- Accidental seven-layer jobs `86569` / `86570` were cancelled.
+- Four-layer jobs completed:
+  - `86571`: VGGT1 MLP-L4-H1024, layers `12,16,20,24`, completed `0:0`, elapsed `02:08:56`;
+  - `86572`: VGGT1 cross_attention-L4-H1024, layers `12,16,20,24`, completed `0:0`, elapsed `02:13:51`.
+
+Final VGGT1 50ep table:
+
+| adapter | layer | F@0.10 | pred-to-GT p90 | Chamfer-L2 | final loss |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MLP | 12 | `0.5316993988168482` | `0.37930816908677417` | `0.07861695190270741` | `0.7722029089927673` |
+| MLP | 16 | `0.702544731989172` | `0.19675995161135992` | `0.027118226668486994` | `0.7381577491760254` |
+| MLP | 20 | `0.519013588803542` | `0.38937361538410187` | `0.07316385923574369` | `0.7465556263923645` |
+| MLP | 24 | `0.6690686277634136` | `0.2389497272670269` | `0.0331160935262839` | `0.7303116321563721` |
+| CA | 12 | `0.5065650562192365` | `0.33501065025726956` | `0.07443799295773108` | `0.677529513835907` |
+| CA | 16 | `0.6835200371527321` | `0.23028291016817093` | `0.030130337458103895` | `0.6614104509353638` |
+| CA | 20 | `0.7014525243138799` | `0.21181315431992212` | `0.027010128212471802` | `0.6642186045646667` |
+| CA | 24 | `0.6204781376731087` | `0.2675088259081046` | `0.03806558856740594` | `0.6846963763237` |
+
+Interpretation:
+
+- New official VGGT1 baseline is MLP layer16 50ep (`F@0.10=0.702544731989172`).
+- CA layer20 50ep is the key readout comparison (`F@0.10=0.7014525243138799`, best Chamfer among these readouts at `0.027010128212471802`).
+- CA does not simply beat MLP; instead, it changes which layer is readable. Layer20 is weak under MLP and near-best under CA.
+- Omega dense/full-token remained negative versus these baselines, and later dense CA / register-only CA did not reverse the ranking; see the `2026-05-20` update above.
+
 ## 2026-05-19 WAN final pause
 
 WAN Route2 is paused as a main branch after the 2026-05-19 audit. The final consolidated summary is `docs/probe/wan_summary_2026-05-19.md`.

@@ -53,7 +53,7 @@ from vggt_nova_adapter_common_raw import (
     set_seed,
     trainable_parameter_names,
     write_point_cloud_ply,
-    load_vggt,
+    load_visual_backbone,
     resolve_device,
 )
 
@@ -162,8 +162,12 @@ def parse_args():
     parser.add_argument("--output_dir", default="experiments/probe3d/result/vggt23_nova_adapter_long_seed17")
     parser.add_argument("--debug_one_batch", action="store_true")
     parser.add_argument("--nova_ckpt", default=None)
+    parser.add_argument("--backbone", default="vggt", choices=("vggt", "vggt_omega"), help="Frozen visual backbone used to produce adapter input tokens.")
     parser.add_argument("--vggt_weights", default=None, help="Optional local VGGT-1B model.pt path; avoids network fallback on Slurm nodes.")
+    parser.add_argument("--vggt_omega_weights", default=None, help="Optional local VGGT-Omega model.pt path; required for --backbone vggt_omega on Slurm nodes.")
+    parser.add_argument("--vggt_omega_image_resolution", type=int, default=512, help="Image resolution passed to VGGT-Omega preprocessing.")
     parser.add_argument("--vggt_layer", type=int, default=23, help="VGGT human layer to use as frozen representation. 0 means DINO patch tokens before VGGT alternating attention; 1-24 mean VGGT aggregator layers.")
+    parser.add_argument("--vggt_token_mode", default="full", choices=("full", "registers"), help="Token subset passed to the adapter. 'registers' selects VGGT-Omega Frozen Scene Tokens only.")
     parser.add_argument("--dataset", default="scrream_adapter", choices=("scrream_adapter", "scannet"))
     parser.add_argument("--data_root", default=None, help="Dataset root for --dataset scannet, or adapter .pt path for --dataset scrream_adapter.")
     parser.add_argument("--train_split", default="train", help="Training split name for the selected dataset.")
@@ -494,6 +498,8 @@ def run_eval(adapter, decoder, loader, device, meta, args, max_batches=None, out
                 args.amp,
                 args.feature_cache_dir,
                 vggt_layer=args.vggt_layer,
+                backbone=args.backbone,
+                token_mode=args.vggt_token_mode,
             )
             tokens = adapter_module(selected)
             pred = sample_decoder(decoder, tokens, args.num_queries, meta["fm_step_size"], args.seed + batch_idx, images.shape[1])
@@ -608,7 +614,18 @@ def cache_key_from_paths(paths):
     return hashlib.sha1("\n".join(paths).encode("utf-8")).hexdigest()
 
 
-def get_selected_features(vggt, images, batch, feature_cache, device, amp, feature_cache_dir=None, vggt_layer=23):
+def get_selected_features(
+    vggt,
+    images,
+    batch,
+    feature_cache,
+    device,
+    amp,
+    feature_cache_dir=None,
+    vggt_layer=23,
+    backbone: str = "vggt",
+    token_mode: str = "full",
+):
     batch_size = images.shape[0]
     path_tuples = sample_keys_from_batch(batch)
     if len(path_tuples) != batch_size:
@@ -625,14 +642,36 @@ def get_selected_features(vggt, images, batch, feature_cache, device, amp, featu
 
     selected_list = []
     for i, paths in enumerate(path_tuples):
-        key = f"layer{int(vggt_layer):02d}_{cache_key_from_paths(paths)}"
+        token_key = "" if token_mode == "full" else f"_{token_mode}"
+        key = f"{backbone}{token_key}_layer{int(vggt_layer):02d}_{cache_key_from_paths(paths)}"
+        legacy_key = None
+        if backbone == "vggt" and token_mode == "full":
+            # Historical VGGT-1 cache files predate the explicit backbone
+            # prefix. Keep reading them so adapter-readout sweeps can reuse the
+            # frozen feature cache instead of recomputing identical tensors.
+            legacy_key = f"layer{int(vggt_layer):02d}_{cache_key_from_paths(paths)}"
         selected_cpu = feature_cache.get(key) if use_memory_cache else None
         cache_path = cache_root / f"{key}.pt" if cache_root is not None else None
         if selected_cpu is None and cache_path is not None and cache_path.exists():
             selected_cpu = torch.load(cache_path, map_location="cpu")
+        if (
+            selected_cpu is None
+            and legacy_key is not None
+            and cache_root is not None
+        ):
+            legacy_cache_path = cache_root / f"{legacy_key}.pt"
+            if legacy_cache_path.exists():
+                selected_cpu = torch.load(legacy_cache_path, map_location="cpu")
         if selected_cpu is None:
             with torch.no_grad():
-                selected, _, _, _ = extract_vggt_feature_for_layer(vggt, images[i : i + 1], human_layer=int(vggt_layer), amp=amp)
+                selected, _, _, patch_start_idx = extract_vggt_feature_for_layer(vggt, images[i : i + 1], human_layer=int(vggt_layer), amp=amp)
+                selected, _ = select_vggt_tokens(
+                    selected,
+                    patch_start_idx=patch_start_idx,
+                    token_mode=token_mode,
+                    backbone=backbone,
+                    human_layer=int(vggt_layer),
+                )
             selected_cpu = selected.detach().cpu().to(torch.float16)
             if cache_path is not None:
                 torch.save(selected_cpu, cache_path)
@@ -644,6 +683,32 @@ def get_selected_features(vggt, images, batch, feature_cache, device, amp, featu
         selected_list.append(selected_cpu.to(device))
 
     return torch.cat(selected_list, dim=0).contiguous()
+
+
+def select_vggt_tokens(
+    selected: torch.Tensor,
+    *,
+    patch_start_idx: int,
+    token_mode: str,
+    backbone: str,
+    human_layer: int,
+) -> tuple[torch.Tensor, str]:
+    if token_mode == "full":
+        return selected, "full aggregator token sequence"
+    if token_mode == "registers":
+        if backbone != "vggt_omega":
+            raise ValueError("--vggt_token_mode registers is only defined for --backbone vggt_omega.")
+        if human_layer <= 0:
+            raise ValueError("--vggt_token_mode registers requires an aggregator layer, not human layer 0 DINO tokens.")
+        if selected.ndim != 4:
+            raise ValueError(f"Register-token selection expects [B,S,P,C] features, got {tuple(selected.shape)}")
+        if patch_start_idx <= 1:
+            raise ValueError(f"Invalid patch_start_idx={patch_start_idx}; expected camera token plus register tokens.")
+        return selected[:, :, 1:patch_start_idx, :].contiguous(), (
+            f"VGGT-Omega register-only Frozen Scene Tokens: token indices 1:{patch_start_idx} "
+            f"({patch_start_idx - 1} tokens per view)"
+        )
+    raise ValueError(f"Unsupported vggt_token_mode={token_mode!r}")
 
 
 def maybe_init_wandb(args, output_dir: Path, config: dict):
@@ -717,6 +782,8 @@ def main():
             split_override=args.train_split, distributed=dist_ctx["enabled"], rank=dist_ctx["rank"], world_size=dist_ctx["world_size"],
             scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin, scannet_min_views=args.scannet_min_views,
             scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
+            image_loader=args.backbone,
+            image_resolution=args.vggt_omega_image_resolution,
         )
         val_loader = None
         test_loader = None
@@ -728,6 +795,8 @@ def main():
                 distributed=dist_ctx["enabled"], rank=dist_ctx["rank"], world_size=dist_ctx["world_size"],
                 scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin, scannet_min_views=args.scannet_min_views,
                 scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
+                image_loader=args.backbone,
+                image_resolution=args.vggt_omega_image_resolution,
             )
             if args.final_test:
                 test_loader, _ = build_loader(
@@ -737,8 +806,15 @@ def main():
                     distributed=dist_ctx["enabled"], rank=dist_ctx["rank"], world_size=dist_ctx["world_size"],
                     scannet_target_mode=args.scannet_target_mode, scannet_frustum_margin=args.scannet_frustum_margin, scannet_min_views=args.scannet_min_views,
                     scannet_complete_points=args.scannet_complete_points, scannet_max_interval=args.scannet_max_interval,
+                    image_loader=args.backbone,
+                    image_resolution=args.vggt_omega_image_resolution,
                 )
-        vggt = load_vggt(device, weights_path=args.vggt_weights)
+        vggt = load_visual_backbone(
+            device,
+            backbone=args.backbone,
+            vggt_weights=args.vggt_weights,
+            vggt_omega_weights=args.vggt_omega_weights,
+        )
         run_eval.vggt = vggt
         feature_cache = {}
         run_eval.feature_cache = feature_cache
@@ -754,10 +830,19 @@ def main():
             human_layer=args.vggt_layer,
             amp=args.amp,
         )
+        selected, token_selection_reason = select_vggt_tokens(
+            selected,
+            patch_start_idx=patch_start_idx,
+            token_mode=args.vggt_token_mode,
+            backbone=args.backbone,
+            human_layer=args.vggt_layer,
+        )
         if is_main:
             print(f"Requested VGGT human layer: {args.vggt_layer}")
             print(f"Selected VGGT feature index: {selected_idx}")
             print(f"Selection reason: {reason}")
+            print(f"Token mode: {args.vggt_token_mode}")
+            print(f"Token selection reason: {token_selection_reason}")
             print(f"Selected VGGT feature shape: {tuple(selected.shape)}")
 
         if args.adapter_type == "mlp":
@@ -815,9 +900,12 @@ def main():
         config.update(
             {
                 "vggt_layer": args.vggt_layer,
+                "backbone": args.backbone,
                 "selected_vggt_feature_index": selected_idx,
                 "selected_vggt_feature_shape": list(selected.shape),
                 "selection_reason": reason,
+                "vggt_token_mode": args.vggt_token_mode,
+                "token_selection_reason": token_selection_reason,
                 "patch_start_idx": patch_start_idx,
                 "adapter_type": args.adapter_type,
                 "adapter_heads": args.adapter_heads,
@@ -835,6 +923,8 @@ def main():
                 "nova_decoder_meta": meta,
                 "nova_ckpt": str(args.nova_ckpt) if args.nova_ckpt else None,
                 "vggt_weights": str(args.vggt_weights) if args.vggt_weights else None,
+                "vggt_omega_weights": str(args.vggt_omega_weights) if args.vggt_omega_weights else None,
+                "vggt_omega_image_resolution": args.vggt_omega_image_resolution,
                 "dataset": {"data_root": data_args.data_root, "test_dataset_name": data_args.test_dataset_name},
                 "image_root_map": args.image_root_map,
             }
@@ -899,6 +989,8 @@ def main():
                 args.amp,
                 args.feature_cache_dir,
                 vggt_layer=args.vggt_layer,
+                backbone=args.backbone,
+                token_mode=args.vggt_token_mode,
             )
             target = get_targets(batch, meta["query_source"], max_points=args.num_queries, norm_mode=meta.get("norm_mode", "none"))
 

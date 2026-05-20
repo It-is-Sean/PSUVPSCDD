@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=scrream_vggt_layer_pack
+#SBATCH --job-name=scrream_vggt_omega_layer_pack
 #SBATCH --output=slurm_out/%x_%j.out
 #SBATCH --error=slurm_out/%x_%j.err
 #SBATCH --time=48:00:00
@@ -29,7 +29,7 @@ else
   export ALL_PROXY="${ALL_PROXY:-http://127.0.0.1:7896}"
 fi
 
-LAYERS_CSV="${SCRREAM_ABLATION_LAYERS:-0,4,8,12,16,20,24}"
+LAYERS_CSV="${SCRREAM_ABLATION_LAYERS:-16,24}"
 IFS=',' read -r -a LAYERS <<< "$LAYERS_CSV"
 VISIBLE_RAW="${CUDA_VISIBLE_DEVICES:-}"
 if [[ -n "$VISIBLE_RAW" ]]; then
@@ -43,16 +43,18 @@ else
 fi
 MAX_PARALLEL="${SCRREAM_PACK_PARALLEL:-${#GPU_IDS[@]}}"
 if [[ "$MAX_PARALLEL" -lt 1 ]]; then
-  echo "No GPUs visible for packed layer ablation." >&2
+  echo "No GPUs visible for packed VGGT-Omega layer ablation." >&2
   exit 2
 fi
 
 ADAPTER_DATA="${SCRREAM_ADAPTER_DATA:-experiments/probe3d/adapter_data/scrream_mesh_complete_n2_adapter_seed17_tp20000_ms500000_trainplus_test.pt}"
 NOVA_CKPT="${SCRREAM_NOVA_CKPT:-checkpoints/scene_ae/checkpoint-last.pth}"
-VGGT_WEIGHTS="${SCRREAM_VGGT_WEIGHTS:-checkpoints/vggt/model.pt}"
-RUN_PREFIX="${SCRREAM_ABLATION_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_seed17_vggt_layer}"
+VGGT_OMEGA_WEIGHTS="${SCRREAM_VGGT_OMEGA_WEIGHTS:-checkpoints/vggt_omega/vggt_omega_1b_512.pt}"
+VGGT_OMEGA_IMAGE_RESOLUTION="${SCRREAM_VGGT_OMEGA_IMAGE_RESOLUTION:-512}"
+RUN_PREFIX="${SCRREAM_ABLATION_RUN_PREFIX:-scrream_mesh_complete_n2_trainplus_test_tp20000_ms500000_mlp_l4_nova_flow_robustval_metafilter_seed17_vggt_omega_layer}"
 FEATURE_CACHE_RUN_PREFIX="${SCRREAM_FEATURE_CACHE_RUN_PREFIX:-$RUN_PREFIX}"
 ADAPTER_TYPE="${SCRREAM_ADAPTER_TYPE:-mlp}"
+VGGT_TOKEN_MODE="${SCRREAM_VGGT_TOKEN_MODE:-full}"
 NUM_QUERIES="${SCRREAM_NUM_QUERIES:-20000}"
 EPOCHS="${SCRREAM_EPOCHS:-50}"
 BATCH_SIZE="${SCRREAM_BATCH_SIZE:-1}"
@@ -73,12 +75,16 @@ if [[ ! -f "$NOVA_CKPT" ]]; then
   echo "Missing NOVA checkpoint: $NOVA_CKPT" >&2
   exit 2
 fi
-if [[ ! -f "$VGGT_WEIGHTS" ]]; then
-  echo "Missing VGGT weights: $VGGT_WEIGHTS" >&2
+if [[ ! -f "$VGGT_OMEGA_WEIGHTS" ]]; then
+  echo "Missing VGGT-Omega weights: $VGGT_OMEGA_WEIGHTS" >&2
+  exit 2
+fi
+if [[ ! -d third_party/vggt-omega ]]; then
+  echo "Missing third_party/vggt-omega. Run git submodule update --init --recursive." >&2
   exit 2
 fi
 
-echo "Packed SCRREAM VGGT layer ablation"
+echo "Packed SCRREAM VGGT-Omega layer ablation"
 echo "  layers=$LAYERS_CSV"
 echo "  visible_gpus=${GPU_IDS[*]}"
 echo "  max_parallel=$MAX_PARALLEL"
@@ -88,8 +94,11 @@ echo "  adapter_layers=${SCRREAM_ADAPTER_LAYERS:-4}"
 echo "  adapter_hidden_dim=${SCRREAM_ADAPTER_HIDDEN_DIM:-1024}"
 echo "  adapter_heads=${SCRREAM_ADAPTER_HEADS:-8}"
 echo "  adapter_mlp_ratio=${SCRREAM_ADAPTER_MLP_RATIO:-2.0}"
+echo "  vggt_token_mode=$VGGT_TOKEN_MODE"
 echo "  run_prefix=$RUN_PREFIX"
 echo "  feature_cache_run_prefix=$FEATURE_CACHE_RUN_PREFIX"
+echo "  vggt_omega_weights=$VGGT_OMEGA_WEIGHTS"
+echo "  vggt_omega_image_resolution=$VGGT_OMEGA_IMAGE_RESOLUTION"
 echo "  max_steps=$MAX_STEPS"
 echo "  num_queries=$NUM_QUERIES"
 echo "  eval_batches=${SCRREAM_EVAL_BATCHES:-0}"
@@ -126,16 +135,19 @@ for idx in "${!LAYERS[@]}"; do
   output_dir="${SCRREAM_OUTPUT_BASE:-experiments/probe3d/result}/${RUN_PREFIX}${layer_padded}"
   feature_cache_dir="${SCRREAM_FEATURE_CACHE_BASE:-experiments/probe3d/feature_cache}/${FEATURE_CACHE_RUN_PREFIX}${layer_padded}"
   mkdir -p "$output_dir" "$feature_cache_dir"
-  log_file="slurm_out/scrream_vggt_${ADAPTER_TYPE}_layer_${layer_padded}_${SLURM_JOB_ID:-manual}.log"
-  echo "Launching layer=$layer on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
+  log_file="slurm_out/scrream_vggt_omega_${ADAPTER_TYPE}_${VGGT_TOKEN_MODE}_layer_${layer_padded}_${SLURM_JOB_ID:-manual}.log"
+  echo "Launching VGGT-Omega layer=$layer on CUDA_VISIBLE_DEVICES=$gpu output=$output_dir log=$log_file"
   (
     export CUDA_VISIBLE_DEVICES="$gpu"
     export FEATURE_MEMORY_CACHE_MAX="${FEATURE_MEMORY_CACHE_MAX:-0}"
     python -u experiments/probe3d/train_vggt_nova_adapter.py \
+      --backbone vggt_omega \
       --dataset scrream_adapter \
       --data_root "$ADAPTER_DATA" \
       --nova_ckpt "$NOVA_CKPT" \
-      --vggt_weights "$VGGT_WEIGHTS" \
+      --vggt_omega_weights "$VGGT_OMEGA_WEIGHTS" \
+      --vggt_omega_image_resolution "$VGGT_OMEGA_IMAGE_RESOLUTION" \
+      --vggt_token_mode "$VGGT_TOKEN_MODE" \
       --adapter_type "$ADAPTER_TYPE" \
       --adapter_layers "${SCRREAM_ADAPTER_LAYERS:-4}" \
       --adapter_hidden_dim "${SCRREAM_ADAPTER_HIDDEN_DIM:-1024}" \

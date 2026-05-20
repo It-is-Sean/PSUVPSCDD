@@ -154,12 +154,29 @@
 - [ ] defer low-priority MLP-only capacity variants (`MLP-L6-H1024`, `MLP-L4-H2048`); note the current MLP already uses `GELU`, so this is probably not the root cause
 
 ### Next backbone probe
-- [ ] choose next frozen backbone to probe after WAN
-- [ ] define the next-backbone feature cache schema, preserving native grid / temporal metadata
-- [ ] run cache shape / metadata sanity on 2 SCRREAM samples
-- [ ] add zero or sample-shuffle control before full training
-- [ ] run one-step adapter training smoke with robust val previews
-- [ ] start with a small layer/readout pilot before any broad ablation
+- [x] choose next frozen backbone to probe after WAN: VGGT-Omega
+- [x] add `third_party/vggt-omega` submodule
+- [x] add `--backbone vggt_omega` support to the VGGT/NOVA training entrypoint
+- [x] add VGGT-Omega Slurm download and dense/full-token layer-ablation launchers
+- [x] audit local `checkpoints/vggt_omega/model.pt`: it is byte-identical to old VGGT and must not be used for Omega conclusions
+- [x] download/verify official VGGT-Omega 512 checkpoint at `checkpoints/vggt_omega/vggt_omega_1b_512.pt`
+- [x] run VGGT-Omega import/load/shape preflight with the official checkpoint
+- [x] smoke VGGT-Omega dense/full-token SCRREAM probe at layer `16`
+- [x] run formal VGGT-Omega dense/full-token comparison at layers `16,24`; job `86564` completed, but layer16/layer24 underperformed old VGGT
+- [x] cancel accidental seven-layer VGGT1 50ep jobs `86569` / `86570`
+- [x] submit VGGT1 50ep four-layer MLP baseline job `86571` for layers `12,16,20,24`
+- [x] submit VGGT1 50ep four-layer CA baseline job `86572` for layers `12,16,20,24`
+- [x] wait for VGGT1 50ep jobs `86571` / `86572` to finish; both completed `0:0` on `air-node-02`
+- [x] analyze final `MLP/CA x layers 12,16,20,24` table from `final_metrics.json`; new main baseline is VGGT1 MLP layer16 50ep (`F@0.10=0.702544731989172`), and key readout comparison is VGGT1 CA layer20 50ep (`F@0.10=0.7014525243138799`)
+- [x] decide Omega next step after VGGT1 50ep table: do not broaden dense-token MLP; prioritize dense-token CA and register-only "Frozen Scene Tokens" CA
+- [x] run Omega dense/full-token CA for layers `12,16,20,24`; best is layer16 with `F@0.10=0.6576072630447046`, below VGGT1
+- [x] run Omega register-only / "Frozen Scene Tokens" CA for layers `12,16,20,24`; best is layer16 with `F@0.10=0.4930976482166729`, far below dense Omega and VGGT1
+- [x] conclude current Omega branches do not rescue the NOVA/FM probe ranking: dense MLP, dense CA, and register-only CA all rank Omega below VGGT1
+- [ ] design and implement a decoder-free SCRREAM direct spatial readout for frozen VGGT1/Omega features
+- [ ] run direct readout on VGGT1 MLP-layer16-equivalent features and Omega dense layer16 / layer20 features under the same split and robust metrics
+- [ ] compare direct-readout ranking against NOVA/FM ranking; if Omega improves there but not through NOVA/FM, reframe the current generator probe as measuring condition-manifold compatibility rather than pure representation quality
+- [ ] add zero or sample-shuffle control before any broad new-backbone training beyond the validity audit
+- [ ] define the next-backbone feature cache schema if moving beyond dense/full-token direct extraction
 
 ## Deferred after SCRREAM baseline
 

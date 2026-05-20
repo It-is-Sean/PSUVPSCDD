@@ -23,10 +23,15 @@ PROBE3D_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PROBE3D_ROOT.parents[1]
 DEFAULT_REFERENCE_ROOT = REPO_ROOT
 DEFAULT_VGGT_REPO = REPO_ROOT / "third_party" / "vggt"
+DEFAULT_VGGT_OMEGA_REPO = REPO_ROOT / "third_party" / "vggt-omega"
 DEFAULT_VGGT_WEIGHTS_CANDIDATES = [
     Path("/data1/jcd_data/cache/models/vggt/VGGT-1B/model.pt"),
     REPO_ROOT / "checkpoints" / "vggt" / "model.pt",
     REPO_ROOT / "artifacts" / "weights" / "vggt" / "VGGT-1B" / "model.pt",
+]
+DEFAULT_VGGT_OMEGA_WEIGHTS_CANDIDATES = [
+    REPO_ROOT / "checkpoints" / "vggt_omega" / "vggt_omega_1b_512.pt",
+    REPO_ROOT / "checkpoints" / "vggt_omega" / "model.pt",
 ]
 DEFAULT_NOVA_CKPT_CANDIDATES = [
     REPO_ROOT / "checkpoints/scene_ae/checkpoint-last.pth",
@@ -48,6 +53,15 @@ def resolve_vggt_weights(weights_path: str | None = None) -> Path | None:
     return None
 
 
+def resolve_vggt_omega_weights(weights_path: str | None = None) -> Path | None:
+    if weights_path:
+        return Path(weights_path)
+    for candidate in DEFAULT_VGGT_OMEGA_WEIGHTS_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def resolve_nova_ckpt(ckpt_path: str | Path | None = None) -> Path:
     if ckpt_path is not None:
         path = Path(ckpt_path)
@@ -64,10 +78,10 @@ def resolve_nova_ckpt(ckpt_path: str | Path | None = None) -> Path:
     )
 
 
-def add_repo_paths() -> None:
+def add_repo_paths(extra_paths: list[Path] | None = None) -> None:
     # Prefer the integrated repo copy first. Fall back to the existing CUT3R
     # checkout only if the local repo does not yet contain dust3r.datasets.
-    search_paths = [DEFAULT_VGGT_REPO, REPO_ROOT]
+    search_paths = list(extra_paths or []) + [DEFAULT_VGGT_REPO, REPO_ROOT]
     if not (REPO_ROOT / "dust3r" / "datasets").exists():
         search_paths.append(DEFAULT_DUST3R_SRC)
     for path in search_paths:
@@ -198,6 +212,80 @@ def load_vggt(device: torch.device, weights_path: str | None = None, model_id: s
     return model
 
 
+def load_vggt_omega(device: torch.device, weights_path: str | None = None):
+    if not DEFAULT_VGGT_OMEGA_REPO.exists():
+        raise FileNotFoundError(
+            f"VGGT-Omega repo not found at {DEFAULT_VGGT_OMEGA_REPO}. "
+            "Run git submodule update --init --recursive."
+        )
+    add_repo_paths(extra_paths=[DEFAULT_VGGT_OMEGA_REPO])
+    from vggt_omega.models import VGGTOmega
+
+    weights = resolve_vggt_omega_weights(weights_path)
+    if weights is None or not weights.exists():
+        searched = "\n".join(str(path) for path in DEFAULT_VGGT_OMEGA_WEIGHTS_CANDIDATES)
+        raise FileNotFoundError(
+            "Could not find VGGT-Omega weights. Set --vggt_omega_weights explicitly. "
+            f"Searched:\n{searched}"
+        )
+    model = VGGTOmega()
+    payload = torch.load(weights, map_location="cpu")
+    state = payload.get("state_dict", payload.get("model", payload)) if isinstance(payload, dict) else payload
+    _assert_vggt_omega_state_dict(state, weights)
+    missing, unexpected = model.load_state_dict(state, strict=True)
+    if missing or unexpected:
+        raise RuntimeError(f"Failed to load VGGT-Omega weights cleanly: missing={missing}, unexpected={unexpected}")
+    if hasattr(model, "aggregator") and hasattr(model.aggregator, "cached_layer_indices"):
+        model.aggregator.cached_layer_indices = set(range(int(model.aggregator.depth)))
+    print(f"Loaded VGGT-Omega weights from {weights}")
+    model.to(device).eval().requires_grad_(False)
+    return model
+
+
+def _assert_vggt_omega_state_dict(state: Any, weights: Path) -> None:
+    if not hasattr(state, "keys"):
+        raise RuntimeError(f"VGGT-Omega checkpoint {weights} is not a state dict.")
+    keys = set(state.keys())
+    errors: list[str] = []
+    register = state.get("aggregator.register_token")
+    patch_proj = state.get("aggregator.patch_embed.patch_embed.proj.weight")
+    if register is None or tuple(register.shape)[:3] != (1, 2, 16):
+        errors.append(
+            "expected aggregator.register_token shape [1,2,16,1024], "
+            f"got {None if register is None else tuple(register.shape)}"
+        )
+    if patch_proj is None or tuple(patch_proj.shape[-2:]) != (16, 16):
+        errors.append(
+            "expected patch embedding kernel 16x16, "
+            f"got {None if patch_proj is None else tuple(patch_proj.shape)}"
+        )
+    if not any(key.startswith("aggregator.inter_frame_blocks.") for key in keys):
+        errors.append("missing aggregator.inter_frame_blocks.* keys")
+    if any(key.startswith("aggregator.global_blocks.") for key in keys):
+        errors.append("contains old VGGT aggregator.global_blocks.* keys")
+    if any(key.startswith("point_head.") for key in keys) and not any(key.startswith("dense_head.") for key in keys):
+        errors.append("contains old VGGT point_head/depth_head style keys instead of VGGT-Omega dense_head keys")
+    if errors:
+        joined = "; ".join(errors)
+        raise RuntimeError(
+            f"{weights} does not look like a VGGT-Omega checkpoint: {joined}. "
+            "Use the official VGGT-Omega 1B 512 checkpoint, e.g. vggt_omega_1b_512.pt."
+        )
+
+
+def load_visual_backbone(
+    device: torch.device,
+    backbone: str = "vggt",
+    vggt_weights: str | None = None,
+    vggt_omega_weights: str | None = None,
+):
+    if backbone == "vggt":
+        return load_vggt(device, weights_path=vggt_weights)
+    if backbone == "vggt_omega":
+        return load_vggt_omega(device, weights_path=vggt_omega_weights)
+    raise ValueError(f"Unsupported visual backbone: {backbone!r}")
+
+
 def extract_vggt_features(vggt, images: torch.Tensor, amp: bool = True) -> tuple[list[torch.Tensor], int]:
     if images.ndim == 4:
         images = images.unsqueeze(1)
@@ -237,6 +325,11 @@ def select_vggt_layer(features: list[torch.Tensor], human_layer: int) -> tuple[t
         raise ValueError(
             f"Requested VGGT human layer {human_layer}, but aggregator returned only "
             f"{len(features)} intermediate layers."
+        )
+    if features[idx] is None:
+        raise RuntimeError(
+            f"Requested VGGT human layer {human_layer}, but aggregator output index {idx} is None. "
+            "For VGGT-Omega, ensure aggregator.cached_layer_indices covers the requested layer."
         )
     reason = (
         f"VGGT human layer {human_layer} maps to aggregator output index {idx} "
@@ -323,6 +416,8 @@ class AdapterImagePointDataset(Dataset):
         split: str | None = None,
         max_samples: int | None = None,
         image_root_map: tuple[str, str] | None = None,
+        image_loader: str = "vggt",
+        image_resolution: int = 512,
     ) -> None:
         add_repo_paths()
         self.path = Path(path)
@@ -332,6 +427,10 @@ class AdapterImagePointDataset(Dataset):
         self.metadata = payload.get("metadata", [{} for _ in self.scene_ids])
         self.splits = payload.get("splits", ["train" for _ in self.scene_ids])
         self.image_root_map = image_root_map
+        self.image_loader = image_loader
+        self.image_resolution = int(image_resolution)
+        if self.image_loader not in {"vggt", "vggt_omega"}:
+            raise ValueError(f"Unsupported image_loader={self.image_loader!r}")
         self.indices = list(range(len(self.scene_ids)))
         if split is not None:
             self.indices = [idx for idx in self.indices if self.splits[idx] == split]
@@ -365,12 +464,20 @@ class AdapterImagePointDataset(Dataset):
         )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
-        from vggt.utils.load_fn import load_and_preprocess_images
+        if self.image_loader == "vggt_omega":
+            add_repo_paths(extra_paths=[DEFAULT_VGGT_OMEGA_REPO])
+            from vggt_omega.utils.load_fn import load_and_preprocess_images
+        else:
+            from vggt.utils.load_fn import load_and_preprocess_images
 
         src_idx = self.indices[idx]
         paths = self._resolve_frame_paths(self.metadata[src_idx])
+        if self.image_loader == "vggt_omega":
+            images = load_and_preprocess_images(paths, image_resolution=self.image_resolution)
+        else:
+            images = load_and_preprocess_images(paths, mode="pad")
         return {
-            "images": load_and_preprocess_images(paths, mode="pad"),
+            "images": images,
             "target_points": self.targets[src_idx],
             "scene_id": self.scene_ids[src_idx],
             "split": self.splits[src_idx],
@@ -506,6 +613,8 @@ def build_loader(
     scannet_min_views: int = 2,
     scannet_complete_points: int = 10000,
     scannet_max_interval: int = 1,
+    image_loader: str = "vggt",
+    image_resolution: int = 512,
 ):
     del cfg
     if dataset_name == "scannet":
@@ -532,9 +641,21 @@ def build_loader(
     split = split_override or ("test" if test else "train")
     dataset_path = Path(data_root) if data_root else DEFAULT_ADAPTER_DATA
     try:
-        dataset = AdapterImagePointDataset(dataset_path, split=split, image_root_map=image_root_map)
+        dataset = AdapterImagePointDataset(
+            dataset_path,
+            split=split,
+            image_root_map=image_root_map,
+            image_loader=image_loader,
+            image_resolution=image_resolution,
+        )
     except ValueError:
-        dataset = AdapterImagePointDataset(dataset_path, split=None, image_root_map=image_root_map)
+        dataset = AdapterImagePointDataset(
+            dataset_path,
+            split=None,
+            image_root_map=image_root_map,
+            image_loader=image_loader,
+            image_resolution=image_resolution,
+        )
     sampler = None
     if distributed:
         sampler = DistributedSampler(

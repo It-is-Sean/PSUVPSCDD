@@ -26,7 +26,7 @@ This is the cleaner research layer for running the shared complete-3D decoding a
 ### 3. Collaborator-side direct experiment path
 - `experiments/probe3d/`
 
-This contains the more concrete and fast-moving probe experiments, especially the VGGT/NOVA and WAN/NOVA adapter work.
+This contains the more concrete and fast-moving probe experiments, especially the VGGT/NOVA, VGGT-Omega/NOVA, and WAN/NOVA adapter work.
 
 ## Third-party dependencies
 
@@ -35,6 +35,11 @@ This contains the more concrete and fast-moving probe experiments, especially th
 
 Submodule for `facebookresearch/vggt`, used by both the structured probe path and `experiments/probe3d/`.
 Initialize it before adapter training; an empty submodule checkout causes `ModuleNotFoundError: No module named 'vggt.models.vggt'`.
+
+### VGGT-Omega
+- `third_party/vggt-omega/`
+
+Submodule for `facebookresearch/vggt-omega`, used by the SCRREAM/NOVA next-backbone pilot through `experiments/probe3d/train_vggt_nova_adapter.py --backbone vggt_omega`. The official probe checkpoint is `checkpoints/vggt_omega/vggt_omega_1b_512.pt`; `checkpoints/vggt_omega/model.pt` is an old-VGGT duplicate and should not be used. Dense/full-token MLP, dense/full-token CA, and register-only "Frozen Scene Tokens" CA completed for layers `12,16,20,24`. Best Omega is dense CA layer16 (`F@0.10=0.6576072630447046`), still below VGGT1 MLP layer16 (`0.702544731989172`) and VGGT1 CA layer20 (`0.7014525243138799`). The next step is a probe-validity audit with a decoder-free SCRREAM direct spatial readout, not another broad Omega layer sweep.
 
 ### Wan2.1
 - `third_party/Wan2.1/`
